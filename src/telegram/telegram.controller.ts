@@ -46,14 +46,21 @@ export class TelegramController {
   }
 
   private assertSecret(received: string | undefined): void {
-    const expected = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
+    // Secret Manager values often carry a trailing newline; Telegram's token cannot contain
+    // whitespace, so trimming can only help.
+    const expected = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET')?.trim();
     if (!expected) {
       return;
     }
 
-    const a = Buffer.from(received ?? '');
+    const a = Buffer.from(received?.trim() ?? '');
     const b = Buffer.from(expected);
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      // Lengths only - enough to tell "webhook registered without a secret_token" (0 received)
+      // from a genuine value mismatch, without logging either secret.
+      this.logger.warn(
+        `Rejected request: secret token mismatch (received ${a.length} chars, expected ${b.length})`,
+      );
       throw new UnauthorizedException();
     }
   }

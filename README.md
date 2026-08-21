@@ -154,6 +154,20 @@ it finds `cloudbuild.yaml`; naming the file explicitly is less surprising.
 **`PERMISSION_DENIED` on the deploy step** - the service account chosen in the trigger is missing a
 role from step 4. The error message names the permission; re-check the role list under **IAM**.
 
+**`Secret projects/<NUMBER>/secrets/telegram-bot-token/versions/latest was not found`** - one of
+three things. The secret has no *enabled* version (a secret is only a container; check its
+**Versions** tab). Or it was created as a **regional** secret, whose real path is
+`projects/<NUMBER>/locations/<REGION>/secrets/...` - the **Location** column must read *Automatically
+replicated*; regional secrets cannot be converted, so delete and recreate. Or, most often, the
+secrets live in a **different project** than the trigger: compare the project number in the error
+with the one on your console home dashboard. Secrets must sit in the same project as the trigger, or
+be referenced by full `projects/<NUMBER>/secrets/<NAME>:latest` path in `--set-secrets` with an
+accessor grant in that project.
+
+Note that before the accessor grant exists, a missing secret reports as *Permission denied* rather
+than *not found* - GCP masks existence from callers without access, so fix the IAM grant first and
+re-read the error.
+
 **The build succeeds but the function crashes on start** - almost always step 3: the runtime service
 account cannot read a secret, so `TELEGRAM_BOT_TOKEN` never arrives and `TelegramService` throws on
 boot. Check the function's **Logs** tab for `TELEGRAM_BOT_TOKEN is not set`.

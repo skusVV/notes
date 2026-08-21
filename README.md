@@ -67,7 +67,12 @@ the Console home dashboard) - you need it for the service account names below.
 
 **APIs & Services -> Library**, then search for and **Enable** each of:
 Cloud Functions API, Cloud Run Admin API, Cloud Build API, Artifact Registry API,
-Secret Manager API, Cloud Logging API.
+Secret Manager API, Cloud Logging API, **Cloud Resource Manager API**.
+
+The last one is easy to miss and fails confusingly: the deploy resolves your project id to a project
+number via `cloudresourcemanager.projects.get`, and without it the build dies claiming the service
+account "does not have permission to access projects instance ... (or it may not exist)" even though
+the real cause is just the disabled API.
 
 ### 2. Store the two secrets
 
@@ -95,9 +100,11 @@ starts and immediately fails to boot.
 ### 4. Let Cloud Build deploy the function
 
 **IAM & Admin -> IAM**, tick **Include Google-provided role grants** at the top right, find the
-service account the build will run as (`<PROJECT_NUMBER>@cloudbuild.gserviceaccount.com`, or
-`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` if you pick that one in the trigger in step
-6), click the pencil, and **Add** these roles:
+service account the build actually runs as, click the pencil, and **Add** these roles. On current
+projects that account is `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` - the same one the
+function runs as - rather than the older `<PROJECT_NUMBER>@cloudbuild.gserviceaccount.com`. The
+deploy step's own error output names the account it authenticated as, so check there if a build
+fails on permissions.
 
 - Cloud Functions Developer
 - Cloud Run Admin

@@ -10,8 +10,7 @@
     "build": "nest build",
     "gcp-build": "nest build",
     "start:local": "nest start --watch",
-    "start:function": "npm run build && functions-framework --target=telegramBot --source=dist",
-    "deploy": "gcloud builds submit --config cloudbuild.yaml"
+    "start:function": "npm run build && functions-framework --target=telegramBot --source=dist"
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^3.4.2",

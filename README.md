@@ -1,8 +1,11 @@
 # Telegram echo bot - NestJS on GCP Cloud Functions
 
 A minimal Telegram webhook handler: every text message it receives is sent straight back to the
-same chat. Written in TypeScript with NestJS, deployed as a gen2 Cloud Function, and redeployed
-automatically by Cloud Build whenever you push to GitHub.
+same chat, and the sender's Telegram id is logged. Written in TypeScript with NestJS, deployed as a
+gen2 Cloud Function, and redeployed automatically by Cloud Build whenever you push to GitHub.
+
+Everything below is done in the browser - the Google Cloud Console UI and Telegram's HTTP API. No
+`gcloud` CLI needed.
 
 ## Layout
 
@@ -13,7 +16,7 @@ src/
   app.module.ts                loads .env via @nestjs/config
   telegram/
     telegram.controller.ts     POST / webhook + GET / health, secret-token check
-    telegram.service.ts        calls Telegram sendMessage
+    telegram.service.ts        calls Telegram sendMessage, logs the sender id
     telegram.types.ts          the slice of the Telegram Update we use
 cloudbuild.yaml                what the GitHub push trigger runs
 .env.example                   copy to .env for local runs
@@ -43,91 +46,130 @@ npm run start:local       # Nest on :8080
 npm run start:function
 ```
 
-Point Telegram at your machine with a tunnel, e.g. `ngrok http 8080`, then register the webhook
-using the URL below.
+Point Telegram at your machine with a tunnel, e.g. `ngrok http 8080`, then register the webhook as
+described at the bottom.
 
-## One-time GCP setup
-
-```bash
-PROJECT_ID=your-project
-REGION=europe-west1
-gcloud config set project "$PROJECT_ID"
-
-gcloud services enable \
-  run.googleapis.com cloudfunctions.googleapis.com cloudbuild.googleapis.com \
-  artifactregistry.googleapis.com secretmanager.googleapis.com
-
-# Store the secrets (values are typed in, not committed)
-printf '%s' 'PASTE_BOT_TOKEN' | gcloud secrets create telegram-bot-token --data-file=-
-openssl rand -hex 32 | gcloud secrets create telegram-webhook-secret --data-file=-
-
-# Let the function's runtime service account read them
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-for S in telegram-bot-token telegram-webhook-secret; do
-  gcloud secrets add-iam-policy-binding "$S" \
-    --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-    --role=roles/secretmanager.secretAccessor
-done
-
-# Let Cloud Build deploy functions
-for ROLE in roles/cloudfunctions.developer roles/run.admin roles/iam.serviceAccountUser \
-            roles/artifactregistry.writer roles/logging.logWriter; do
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" --role="$ROLE"
-done
-```
-
-## Auto-deploy on GitHub push
-
-This folder is the repo root. Push it to GitHub first:
+## Push to GitHub
 
 ```bash
-git init -b main
 git add .                 # .env stays out, see .gitignore
 git commit -m "Telegram echo bot"
 git remote add origin https://github.com/<owner>/<repo>.git
 git push -u origin main
 ```
 
-Connect the repo once (this opens a browser to authorize the Cloud Build GitHub App):
+## One-time GCP setup (Console UI)
 
-```bash
-gcloud builds connections create github github-conn --region="$REGION"
-gcloud builds repositories create my-repo \
-  --remote-uri=https://github.com/<owner>/<repo>.git \
-  --connection=github-conn --region="$REGION"
+Pick your project in the Console project picker first, and note its **project number** (shown on
+the Console home dashboard) - you need it for the service account names below.
+
+### 1. Enable the APIs
+
+**APIs & Services -> Library**, then search for and **Enable** each of:
+Cloud Functions API, Cloud Run Admin API, Cloud Build API, Artifact Registry API,
+Secret Manager API, Cloud Logging API.
+
+### 2. Store the two secrets
+
+**Security -> Secret Manager -> Create secret**, once per secret:
+
+| Name | Secret value |
+| --- | --- |
+| `telegram-bot-token` | the token @BotFather gave you |
+| `telegram-webhook-secret` | any long random string you invent (keep a copy, you need it for `setWebhook`) |
+
+Leave the rest at defaults and click **Create**. The names must match exactly - they are referenced
+by `--set-secrets` in [cloudbuild.yaml](cloudbuild.yaml).
+
+### 3. Let the function read the secrets
+
+For each of the two secrets: open it in Secret Manager, go to the **Permissions** tab ->
+**Grant access**.
+
+- New principal: `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`
+- Role: **Secret Manager Secret Accessor**
+
+Save. This is the runtime service account of the deployed function; without this the function
+starts and immediately fails to boot.
+
+### 4. Let Cloud Build deploy the function
+
+**IAM & Admin -> IAM**, tick **Include Google-provided role grants** at the top right, find the
+service account the build will run as (`<PROJECT_NUMBER>@cloudbuild.gserviceaccount.com`, or
+`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` if you pick that one in the trigger in step
+6), click the pencil, and **Add** these roles:
+
+- Cloud Functions Developer
+- Cloud Run Admin
+- Service Account User
+- Artifact Registry Writer
+- Logs Writer
+
+### 5. Connect the GitHub repository
+
+**Cloud Build -> Repositories**, choose the **2nd gen** tab -> **Create host connection**. Pick your
+region, name it (e.g. `github-conn`), and click through the GitHub authorization popup - it installs
+the Cloud Build GitHub App and asks which repositories it may access. Then **Link repository** and
+select your repo.
+
+### 6. Create the push trigger
+
+**Cloud Build -> Triggers -> Create trigger**:
+
+| Field | Value |
+| --- | --- |
+| Name | `telegram-echo-bot-deploy` |
+| Region | same region you used in step 5 |
+| Event | **Push to a branch** |
+| Source | the repository you linked, branch `^main$` |
+| Configuration | **Cloud Build configuration file (yaml or json)** |
+| Location | Repository, file `cloudbuild.yaml` |
+| Substitution variables | optional: `_REGION` (default `europe-west1`), `_FUNCTION_NAME` (default `telegram-echo-bot`) |
+| Service account | the one you granted roles to in step 4 |
+
+**Create**. From here on, every `git push origin main` makes Cloud Build deploy the function - the
+first push also creates it. Watch progress under **Cloud Build -> History**; runtime logs are under
+the function's **Logs** tab.
+
+To deploy without pushing, use **Run** on the trigger row.
+
+### Build troubleshooting
+
+**`unable to evaluate symlinks in Dockerfile path: lstat /workspace/Dockerfile: no such file or
+directory`**, with a step named `Build` using `gcr.io/cloud-builders/docker` - the trigger is set to
+**Dockerfile**, not to this repo's yaml, so it is trying to `docker build` a project that has no
+Dockerfile. Fix it in **Cloud Build -> Triggers -> (your trigger) -> Edit -> Configuration**: set
+Type to **Cloud Build configuration file (yaml or json)**, Location to **Repository**, and the file
+path to `cloudbuild.yaml`. Save, then **Run**. A correct run shows a single step named `deploy` on
+`gcr.io/google.com/cloudsdktool/cloud-sdk`. Choosing **Autodetected** also works, but only because
+it finds `cloudbuild.yaml`; naming the file explicitly is less surprising.
+
+**`PERMISSION_DENIED` on the deploy step** - the service account chosen in the trigger is missing a
+role from step 4. The error message names the permission; re-check the role list under **IAM**.
+
+**The build succeeds but the function crashes on start** - almost always step 3: the runtime service
+account cannot read a secret, so `TELEGRAM_BOT_TOKEN` never arrives and `TelegramService` throws on
+boot. Check the function's **Logs** tab for `TELEGRAM_BOT_TOKEN is not set`.
+
+**Failure on `--allow-unauthenticated`** - your organization policy blocks public access for
+`allUsers`. Remove that flag from `cloudbuild.yaml` and instead grant **Cloud Run Invoker** to
+`allUsers` on the service under **Cloud Run -> your service -> Security**, or use whatever your org
+policy permits.
+
+### 7. Register the webhook with Telegram
+
+Get the function URL: **Cloud Run -> Services -> telegram-echo-bot** (gen2 functions are Cloud Run
+services), copy the URL at the top. Then open this in your browser, substituting your values:
+
+```text
+https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=<FUNCTION_URL>&secret_token=<WEBHOOK_SECRET>
 ```
 
-Then create the push trigger:
-
-```bash
-gcloud builds triggers create github \
-  --name=telegram-echo-bot-deploy \
-  --region="$REGION" \
-  --repository="projects/$PROJECT_ID/locations/$REGION/connections/github-conn/repositories/my-repo" \
-  --branch-pattern='^main$' \
-  --build-config=cloudbuild.yaml \
-  --substitutions=_REGION=$REGION
-```
-
-From here on, `git push origin main` triggers Cloud Build, which runs `gcloud functions deploy`
-and replaces the running function. Watch it with
-`gcloud builds list --region=$REGION --limit=5` or in the Cloud Build console.
-
-## Register the webhook (once, after the first deploy)
-
-```bash
-URL=$(gcloud functions describe telegram-echo-bot --gen2 --region="$REGION" --format='value(url)')
-TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
-SECRET=$(gcloud secrets versions access latest --secret=telegram-webhook-secret)
-
-curl -sS "https://api.telegram.org/bot$TOKEN/setWebhook" \
-  -d "url=$URL" -d "secret_token=$SECRET"
-```
+A `{"ok":true,...}` response means it is live - message the bot and it will echo back. Check the
+registration any time with `https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo`.
 
 The function URL is stable across redeploys, so this only has to be done again if you change the
-secret or the function name. Verify with
-`curl -sS "https://api.telegram.org/bot$TOKEN/getWebhookInfo"`.
+secret, the function name, or the region.
 
 ## Behaviour notes
 

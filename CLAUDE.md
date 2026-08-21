@@ -9,7 +9,6 @@ Function**, redeployed automatically by a Cloud Build GitHub push trigger. The r
 function source (`--source=.` in [cloudbuild.yaml](cloudbuild.yaml)) - do not move the app into a
 subfolder without also updating the trigger's `--build-config` and the deploy step.
 
-
 ## Commands
 
 ```bash

@@ -1,0 +1,28 @@
+# Executed by the Cloud Build trigger on every push to the connected GitHub branch.
+# No secrets live here - they are read from Secret Manager at deploy/runtime.
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - functions
+      - deploy
+      - ${_FUNCTION_NAME}
+      - --gen2
+      - --runtime=nodejs20
+      - --region=${_REGION}
+      - --source=.
+      - --entry-point=telegramBot
+      - --trigger-http
+      - --allow-unauthenticated
+      - --memory=256Mi
+      - --timeout=60s
+      - --max-instances=10
+      - --set-secrets=TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:latest
+
+substitutions:
+  _FUNCTION_NAME: telegram-echo-bot
+  _REGION: europe-west1
+
+options:
+  logging: CLOUD_LOGGING_ONLY

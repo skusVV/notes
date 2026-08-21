@@ -80,11 +80,13 @@ the real cause is just the disabled API.
 
 | Name | Secret value |
 | --- | --- |
-| `telegram-bot-token` | the token @BotFather gave you |
-| `telegram-webhook-secret` | any long random string you invent (keep a copy, you need it for `setWebhook`) |
+| `TELEGRAM_BOT_TOKEN` | the token @BotFather gave you |
+| `TELEGRAM_WEBHOOK_SECRET` | any long random string you invent (keep a copy, you need it for `setWebhook`) |
 
-Leave the rest at defaults and click **Create**. The names must match exactly - they are referenced
-by `--set-secrets` in [cloudbuild.yaml](cloudbuild.yaml).
+Leave **Replication policy** at *Automatic* and click **Create**. The names are referenced literally
+by `--set-secrets` in [cloudbuild.yaml](cloudbuild.yaml) and are **case-sensitive**, so
+`telegram-bot-token` and `TELEGRAM_BOT_TOKEN` are two different secrets. If you prefer different
+names, change them in both places.
 
 ### 3. Let the function read the secrets
 
@@ -154,8 +156,9 @@ it finds `cloudbuild.yaml`; naming the file explicitly is less surprising.
 **`PERMISSION_DENIED` on the deploy step** - the service account chosen in the trigger is missing a
 role from step 4. The error message names the permission; re-check the role list under **IAM**.
 
-**`Secret projects/<NUMBER>/secrets/telegram-bot-token/versions/latest was not found`** - one of
-three things. The secret has no *enabled* version (a secret is only a container; check its
+**`Secret projects/<NUMBER>/secrets/<NAME>/versions/latest was not found`** - one of four things.
+The name in `--set-secrets` does not match the secret exactly, **case included** (the path in the
+error is what the deploy asked for; compare it to the name in the secret's console URL). The secret has no *enabled* version (a secret is only a container; check its
 **Versions** tab). Or it was created as a **regional** secret, whose real path is
 `projects/<NUMBER>/locations/<REGION>/secrets/...` - the **Location** column must read *Automatically
 replicated*; regional secrets cannot be converted, so delete and recreate. Or, most often, the

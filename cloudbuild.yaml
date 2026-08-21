@@ -18,7 +18,9 @@ steps:
       - --memory=256Mi
       - --timeout=60s
       - --max-instances=10
-      - --set-secrets=TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:latest
+      # ENV_VAR=SECRET_NAME:version. Secret Manager names are case-sensitive and must match the
+      # secrets in this project exactly.
+      - --set-secrets=TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_WEBHOOK_SECRET=TELEGRAM_WEBHOOK_SECRET:latest
 
 substitutions:
   _FUNCTION_NAME: telegram-echo-bot

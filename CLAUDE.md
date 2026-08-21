@@ -66,7 +66,10 @@ unset the secret-token check is **skipped entirely**, which is why it must be se
 environment. Adding a new secret means four steps: `.env.example`, a new secret in the Secret
 Manager UI, the `--set-secrets` list in `cloudbuild.yaml`, and a **Secret Manager Secret Accessor**
 grant to `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` on that secret (see
-[README.md](README.md)).
+[README.md](README.md)). The Secret Manager secrets are named `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_WEBHOOK_SECRET`, matching the env vars; those names are case-sensitive and referenced
+literally by `--set-secrets`, so a mismatch fails the deploy with `... versions/latest was not
+found`.
 
 **Webhook response contract** ([src/telegram/telegram.controller.ts](src/telegram/telegram.controller.ts)):
 a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never processed (timing-safe

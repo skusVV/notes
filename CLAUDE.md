@@ -71,6 +71,13 @@ grant to `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` on that secret
 literally by `--set-secrets`, so a mismatch fails the deploy with `... versions/latest was not
 found`.
 
+**`ALLOWED_USERS` gates every update.** A comma-separated list of Telegram user ids, parsed once in
+`TelegramService`'s constructor; unset or empty means everyone is allowed (and logs a warning at
+startup), which matches how `TELEGRAM_WEBHOOK_SECRET` behaves when unset. Non-allowed senders get a
+refusal message naming their own id rather than silence, and an update with no `from` is refused
+whenever a list is configured. It travels via Secret Manager rather than `--set-env-vars` because
+that flag treats commas as its own separator - a list would be parsed as multiple env vars.
+
 **Webhook response contract** ([src/telegram/telegram.controller.ts](src/telegram/telegram.controller.ts)):
 a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never processed (timing-safe
 compare); everything else gets `200` even when handling throws, so Telegram does not retry the same

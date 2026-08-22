@@ -30,7 +30,11 @@ All sensitive values come from the environment, never from source:
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. Required. |
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
+| `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a refusal message naming their own id. Empty or unset allows everyone. |
 | `PORT` | Local dev only. |
+
+To find your own user id, message the bot and read the `Received message from user <id>` line in
+the logs - the refusal message also states it, so an unlisted user can tell you what to add.
 
 Locally these are read from `.env` (git-ignored). In GCP the same names are injected from Secret
 Manager, so `.env` is never uploaded - `.gcloudignore` and `.gitignore` both exclude it.
@@ -74,7 +78,7 @@ number via `cloudresourcemanager.projects.get`, and without it the build dies cl
 account "does not have permission to access projects instance ... (or it may not exist)" even though
 the real cause is just the disabled API.
 
-### 2. Store the two secrets
+### 2. Store the secrets
 
 **Security -> Secret Manager -> Create secret**, once per secret:
 
@@ -82,11 +86,16 @@ the real cause is just the disabled API.
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | the token @BotFather gave you |
 | `TELEGRAM_WEBHOOK_SECRET` | a random string of `A-Z a-z 0-9 _ -` only, e.g. from `openssl rand -hex 24` (keep a copy, you need it for `setWebhook`) |
+| `ALLOWED_USERS` | comma-separated Telegram user ids, e.g. `111111111,222222222` |
 
 Stick to that character set for the webhook secret. Telegram rejects anything else in
 `secret_token`, and a value containing `&`, `#`, or `+` silently truncates when you paste it into
 the `setWebhook` URL - the webhook then registers a prefix of your secret and every update is
 rejected with `401`.
+
+`ALLOWED_USERS` is not really a secret, but it rides through Secret Manager so its commas cannot
+collide with the commas that separate entries in `--set-secrets`, and so you can change who may use
+the bot without editing the repo or redeploying anything but a new revision.
 
 Leave **Replication policy** at *Automatic* and click **Create**. The names are referenced literally
 by `--set-secrets` in [cloudbuild.yaml](cloudbuild.yaml) and are **case-sensitive**, so
@@ -95,7 +104,7 @@ names, change them in both places.
 
 ### 3. Let the function read the secrets
 
-For each of the two secrets: open it in Secret Manager, go to the **Permissions** tab ->
+For each of the three secrets: open it in Secret Manager, go to the **Permissions** tab ->
 **Grant access**.
 
 - New principal: `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`
@@ -213,6 +222,10 @@ secret, the function name, or the region.
   not retry the same update indefinitely. Failures are logged to Cloud Logging.
 - Every update logs the sender's Telegram user id (and `@username` when present) plus the chat id,
   so you can trace who talked to the bot in Cloud Logging.
+- When `ALLOWED_USERS` is set, anyone not on the list gets a refusal message stating their own user
+  id, and the attempt is logged as `Denied user <id>: not in ALLOWED_USERS`. Updates with no
+  identifiable sender (channel posts, for example) are refused too. Changing the list means adding a
+  new secret version and starting a new revision, since env-var secrets resolve at instance start.
 - Requests with a missing or wrong secret token get `401` and are never processed.
 - Non-text updates (stickers, joins, and so on) are acknowledged and ignored.
 - The Nest app is bootstrapped once per instance and reused across invocations, so only cold

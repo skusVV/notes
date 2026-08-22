@@ -81,9 +81,8 @@ export class TelegramService {
 
     if (!this.isAllowed(message.from)) {
       this.logger.warn(`Denied ${sender}: not in ALLOWED_USERS`);
-      // Tell them their own id so it can be added to the allowlist if that was a mistake.
-      const id = message.from ? ` Your user id is ${message.from.id}.` : '';
-      await this.sendMessage(message.chat.id, `Sorry, you are not allowed to use this bot.${id}`);
+
+      await this.sendMessage(message.chat.id, `Sorry, you are not allowed to use this bot.`);
       return;
     }
 

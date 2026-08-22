@@ -81,7 +81,12 @@ the real cause is just the disabled API.
 | Name | Secret value |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | the token @BotFather gave you |
-| `TELEGRAM_WEBHOOK_SECRET` | any long random string you invent (keep a copy, you need it for `setWebhook`) |
+| `TELEGRAM_WEBHOOK_SECRET` | a random string of `A-Z a-z 0-9 _ -` only, e.g. from `openssl rand -hex 24` (keep a copy, you need it for `setWebhook`) |
+
+Stick to that character set for the webhook secret. Telegram rejects anything else in
+`secret_token`, and a value containing `&`, `#`, or `+` silently truncates when you paste it into
+the `setWebhook` URL - the webhook then registers a prefix of your secret and every update is
+rejected with `401`.
 
 Leave **Replication policy** at *Automatic* and click **Create**. The names are referenced literally
 by `--set-secrets` in [cloudbuild.yaml](cloudbuild.yaml) and are **case-sensitive**, so
@@ -152,6 +157,13 @@ Type to **Cloud Build configuration file (yaml or json)**, Location to **Reposit
 path to `cloudbuild.yaml`. Save, then **Run**. A correct run shows a single step named `deploy` on
 `gcr.io/google.com/cloudsdktool/cloud-sdk`. Choosing **Autodetected** also works, but only because
 it finds `cloudbuild.yaml`; naming the file explicitly is less surprising.
+
+**Telegram gets `401` on every update** - the registered `secret_token` does not match
+`TELEGRAM_WEBHOOK_SECRET`. The function logs `secret token mismatch (received N chars, expected M)`:
+`received 0` means the `setWebhook` call had no `secret_token` at all, and a shorter-than-expected N
+usually means the value was truncated in the URL at a `&`, `#`, or `+`. Fix by storing a new version
+with a URL-safe value, **Run** the trigger so a new revision picks it up (env-var secrets resolve at
+instance start), then re-run `setWebhook`. Telegram retries queued updates once it stops failing.
 
 **`PERMISSION_DENIED` on the deploy step** - the service account chosen in the trigger is missing a
 role from step 4. The error message names the permission; re-check the role list under **IAM**.

@@ -16,8 +16,10 @@ src/
   app.module.ts                loads .env via @nestjs/config
   telegram/
     telegram.controller.ts     POST / webhook + GET / health, secret-token check
-    telegram.service.ts        calls Telegram sendMessage, logs the sender id
+    telegram.service.ts        echo, allowlist, voice download, calls sendMessage
     telegram.types.ts          the slice of the Telegram Update we use
+  transcription/
+    transcription.service.ts   speech to text via Vertex AI (audio/ogg, no transcoding)
 cloudbuild.yaml                what the GitHub push trigger runs
 .env.example                   copy to .env for local runs
 ```
@@ -31,13 +33,19 @@ All sensitive values come from the environment, never from source:
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. Required. |
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
 | `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a refusal message naming their own id. Empty or unset allows everyone. |
+| `GCP_PROJECT` | GCP project used for Vertex AI transcription. No API key involved. If unset, voice messages are refused politely and text echo keeps working. Set automatically on deploy. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Local dev only, and only to transcribe locally. Path to a service-account JSON key. |
+| `VERTEX_LOCATION` | Optional. Defaults to `global`, which is ~10% cheaper than a pinned region. |
+| `TRANSCRIPTION_MODEL` | Optional. Defaults to `gemini-3.5-flash-lite`. |
+| `MAX_VOICE_SECONDS` | Optional, default `300`. Longer voice messages are refused without being downloaded. |
 | `PORT` | Local dev only. |
 
 To find your own user id, message the bot and read the `Received message from user <id>` line in
 the logs - the refusal message also states it, so an unlisted user can tell you what to add.
 
-Locally these are read from `.env` (git-ignored). In GCP the same names are injected from Secret
-Manager, so `.env` is never uploaded - `.gcloudignore` and `.gitignore` both exclude it.
+Locally these are read from `.env` (git-ignored). In GCP the secrets are injected from Secret
+Manager and the non-secret settings from `--set-env-vars`, both in [cloudbuild.yaml](cloudbuild.yaml),
+so `.env` is never uploaded - `.gcloudignore` and `.gitignore` both exclude it.
 
 ## Run locally
 
@@ -71,12 +79,25 @@ the Console home dashboard) - you need it for the service account names below.
 
 **APIs & Services -> Library**, then search for and **Enable** each of:
 Cloud Functions API, Cloud Run Admin API, Cloud Build API, Artifact Registry API,
-Secret Manager API, Cloud Logging API, **Cloud Resource Manager API**.
+Secret Manager API, Cloud Logging API, **Cloud Resource Manager API**, **Vertex AI API**
+(`aiplatform.googleapis.com`).
 
-The last one is easy to miss and fails confusingly: the deploy resolves your project id to a project
-number via `cloudresourcemanager.projects.get`, and without it the build dies claiming the service
-account "does not have permission to access projects instance ... (or it may not exist)" even though
-the real cause is just the disabled API.
+**Cloud Resource Manager API** is easy to miss and fails confusingly: the deploy resolves your
+project id to a project number via `cloudresourcemanager.projects.get`, and without it the build
+dies claiming the service account "does not have permission to access projects instance ... (or it
+may not exist)" even though the real cause is just the disabled API.
+
+**Vertex AI API** is what transcribes voice messages. Without it, text echo works and voice fails.
+Searching the Library for "Vertex AI" no longer finds it: the product was renamed **Gemini
+Enterprise Agent Platform** at Google Cloud Next in April 2026, and the search matches the new
+label. Go straight to it by service id instead, which did not change:
+
+```text
+https://console.cloud.google.com/apis/library/aiplatform.googleapis.com
+```
+
+Throughout this file, prefer the `service.googleapis.com` id over a product name when a search
+comes up empty - Google renames the labels, not the ids.
 
 ### 2. Store the secrets
 
@@ -102,6 +123,9 @@ by `--set-secrets` in [cloudbuild.yaml](cloudbuild.yaml) and are **case-sensitiv
 `telegram-bot-token` and `TELEGRAM_BOT_TOKEN` are two different secrets. If you prefer different
 names, change them in both places.
 
+Transcription needs no secret at all. The deployed function calls Vertex AI as its own service
+account, so there is no API key to store or rotate - just the IAM grant in step 3b.
+
 ### 3. Let the function read the secrets
 
 For each of the three secrets: open it in Secret Manager, go to the **Permissions** tab ->
@@ -112,6 +136,31 @@ For each of the three secrets: open it in Secret Manager, go to the **Permission
 
 Save. This is the runtime service account of the deployed function; without this the function
 starts and immediately fails to boot.
+
+### 3b. Let the function call Vertex AI
+
+Same account, different place. **IAM & Admin -> IAM**, find
+`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`, click the pencil, **Add another role**,
+and pick **Agent Platform User** (`roles/aiplatform.user`). Save. Filter the picker by
+`aiplatform.user` if the label has moved again.
+
+**Do not pick a role labelled "AI Platform ..."** - there are two similarly named products and the
+naming crosses over:
+
+| Label | Role id | Service | Correct? |
+| --- | --- | --- | --- |
+| **Agent Platform User** | `roles/aiplatform.user` | `aiplatform.googleapis.com` | **yes** |
+| AI Platform Editor / Admin / Developer | `roles/ml.*` | `ml.googleapis.com`, the legacy ML Engine | no |
+
+The old product owns the "AI Platform" *labels* while the new one owns the `aiplatform.*` *ids*.
+Granting an "AI Platform" role looks like it worked and then fails at runtime with
+`PERMISSION_DENIED` on `aiplatform.googleapis.com`. Prefer **User** over Administrator: using a
+model is all this needs.
+
+This is what replaces an API key: rather than storing a credential, you grant the identity the
+function already runs as permission to call the model. Without it, text echo works but every voice
+message replies "Sorry, I could not transcribe that voice message." and the function logs a
+`PERMISSION_DENIED` from `aiplatform.googleapis.com`.
 
 ### 4. Let Cloud Build deploy the function
 
@@ -226,7 +275,15 @@ secret, the function name, or the region.
   id, and the attempt is logged as `Denied user <id>: not in ALLOWED_USERS`. Updates with no
   identifiable sender (channel posts, for example) are refused too. Changing the list means adding a
   new secret version and starting a new revision, since env-var secrets resolve at instance start.
+- **Voice messages** are transcribed and the text is sent back. Telegram records voice notes as
+  Opus in an OGG container and Gemini accepts `audio/ogg` directly, so nothing transcodes the audio
+  and there is no ffmpeg in the image. A transcript longer than Telegram's 4096-character limit is
+  split across several replies. Only the duration and transcript *length* are logged, never the
+  text, since these are private notes.
+- The allowlist is checked **before** a voice message is downloaded or sent to the model, so a
+  non-allowed sender cannot run up the Gemini bill. Voice notes longer than `MAX_VOICE_SECONDS` are
+  refused without being downloaded at all.
 - Requests with a missing or wrong secret token get `401` and are never processed.
-- Non-text updates (stickers, joins, and so on) are acknowledged and ignored.
+- Non-text, non-voice updates (stickers, joins, and so on) are acknowledged and ignored.
 - The Nest app is bootstrapped once per instance and reused across invocations, so only cold
   starts pay for it.

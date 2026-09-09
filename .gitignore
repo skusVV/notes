@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 .secrets
+CLAUDE.local.md
 *.log
 .DS_Store
 tsconfig.tsbuildinfo

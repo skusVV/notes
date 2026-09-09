@@ -66,10 +66,12 @@ unset the secret-token check is **skipped entirely**, which is why it must be se
 environment. Adding a new secret means four steps: `.env.example`, a new secret in the Secret
 Manager UI, the `--set-secrets` list in `cloudbuild.yaml`, and a **Secret Manager Secret Accessor**
 grant to `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` on that secret (see
-[README.md](README.md)). The Secret Manager secrets are named `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_WEBHOOK_SECRET`, matching the env vars; those names are case-sensitive and referenced
+[README.md](README.md)). The Secret Manager secrets are named `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_WEBHOOK_SECRET`, and `ALLOWED_USERS`, matching the env vars; those names are case-sensitive and referenced
 literally by `--set-secrets`, so a mismatch fails the deploy with `... versions/latest was not
-found`.
+found`. Non-secret settings (`GCP_PROJECT`, `VERTEX_LOCATION`, `TRANSCRIPTION_MODEL`,
+`MAX_VOICE_SECONDS`) travel via `--set-env-vars` in the same file instead, so the deployed values
+are visible at the deploy boundary rather than implied by code defaults.
 
 **`ALLOWED_USERS` gates every update.** A comma-separated list of Telegram user ids, parsed once in
 `TelegramService`'s constructor; unset or empty means everyone is allowed (and logs a warning at
@@ -77,6 +79,41 @@ startup), which matches how `TELEGRAM_WEBHOOK_SECRET` behaves when unset. Non-al
 refusal message naming their own id rather than silence, and an update with no `from` is refused
 whenever a list is configured. It travels via Secret Manager rather than `--set-env-vars` because
 that flag treats commas as its own separator - a list would be parsed as multiple env vars.
+
+**Transcription is behind an outcome-named boundary.** `TranscriptionService`
+([src/transcription/transcription.service.ts](src/transcription/transcription.service.ts)) exposes
+exactly `transcribe(audio: Buffer, mimeType: string): Promise<string>` and is named for what it does,
+not for Gemini. Swapping in Cloud Speech-to-Text should touch that one file. It calls Gemini
+through **Vertex AI** (`@google/genai` with `vertexai: true`), deliberately *not* the Gemini
+Developer API: there is **no API key anywhere**. The function authenticates as its own runtime
+service account via Application Default Credentials, so the only setup is enabling
+`aiplatform.googleapis.com` and granting `roles/aiplatform.user` to
+`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` - both Console click-paths, and nothing to
+store or rotate. Use those ids, not the product names: Vertex AI was renamed **Gemini Enterprise
+Agent Platform** in April 2026, so console searches for "Vertex AI" fail while the ids still work.
+`roles/aiplatform.user` now displays as **Agent Platform User**; do not confuse it with the
+lookalike **AI Platform** roles, which are `roles/ml.*` on the legacy `ml.googleapis.com` and will
+not grant model access. Do not "simplify" this back to an API key.
+The cost is that a laptop has no GCP identity, so transcribing locally needs
+`GOOGLE_APPLICATION_CREDENTIALS` pointing at a downloaded service-account JSON; testing against the
+deployed bot avoids that entirely.
+
+Nothing decodes audio - Telegram voice notes are Opus-in-OGG and Gemini takes `audio/ogg` inline, so
+there is no ffmpeg step to maintain. Unlike `TelegramService`, this service **must not throw** when
+unconfigured: with no `GCP_PROJECT` it logs a warning, `available` returns false, and voice messages
+get a "not configured" reply so text echo keeps working. Because credentials resolve lazily, a
+missing **Vertex AI User** grant does not fail construction - it surfaces as a `PERMISSION_DENIED`
+on the first `transcribe()` call, caught by `handleVoice`.
+
+**Two ordering rules in `handleUpdate` are load-bearing.** The `ALLOWED_USERS` gate must run
+*before* any voice download or model call, otherwise a stranger can run up the Gemini bill; and the
+"is this an update we handle" check must run *before* the gate, so unhandled types (stickers, joins)
+stay silent instead of drawing a refusal reply. `MAX_VOICE_SECONDS` and the ~15 MB size cap are
+checked before the download for the same reason. The size cap is 15 MB, not 20 MB, because Gemini's
+20 MB request ceiling counts the base64 payload, which inflates bytes by 4/3.
+
+**Replies are chunked.** `sendMessage` splits at 4096 characters because Telegram rejects anything
+longer and a few minutes of speech transcribes past it. Keep new outbound text going through it.
 
 **Webhook response contract** ([src/telegram/telegram.controller.ts](src/telegram/telegram.controller.ts)):
 a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never processed (timing-safe

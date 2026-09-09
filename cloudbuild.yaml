@@ -15,13 +15,22 @@ steps:
       - --entry-point=telegramBot
       - --trigger-http
       - --allow-unauthenticated
+      # 256Mi is measured, not guessed: the app boots at ~62 MB RSS with @google/genai loaded,
+      # and a five-minute voice note adds only ~2 MB (buffer + base64 + request body).
       - --memory=256Mi
-      - --timeout=60s
+      # Timeout is a ceiling, not a reservation - unlike memory you are not billed for it, so
+      # keep headroom for a long memo rather than truncating a transcription mid-flight.
+      - --timeout=120s
       - --max-instances=10
       # ENV_VAR=SECRET_NAME:version. Secret Manager names are case-sensitive and must match the
       # secrets in this project exactly. ALLOWED_USERS goes through Secret Manager too, so its
       # comma-separated value cannot collide with the comma that separates entries in this flag.
       - --set-secrets=TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_WEBHOOK_SECRET=TELEGRAM_WEBHOOK_SECRET:latest,ALLOWED_USERS=ALLOWED_USERS:latest
+      # Not secret, so plain env vars. Transcription needs no API key: the function calls Vertex AI
+      # as its own runtime service account. It only needs to know which project and endpoint to
+      # talk to. Declared here rather than left to code defaults so the model id is visible and
+      # changeable at the deploy boundary. No value may contain a comma: this flag splits on them.
+      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300
 
 substitutions:
   _FUNCTION_NAME: telegram-echo-bot

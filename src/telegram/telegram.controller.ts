@@ -32,17 +32,23 @@ export class TelegramController {
   async webhook(
     @Headers('x-telegram-bot-api-secret-token') secret: string | undefined,
     @Body() update: TelegramUpdate,
-  ): Promise<{ ok: boolean }> {
+  ): Promise<{ ok: boolean; replies?: string[] }> {
     this.assertSecret(secret);
 
+    // Reflect mode is set only on the test function (TEST_REFLECT_REPLY=true). When on, collect the
+    // replies this update produces and return them in the response body, so the verifier can assert
+    // on them over plain HTTP with no GCP identity. Off in production, so the response is unchanged.
+    const reflect = this.config.get<string>('TEST_REFLECT_REPLY')?.trim() === 'true';
+    const sink: string[] | undefined = reflect ? [] : undefined;
+
     try {
-      await this.telegram.handleUpdate(update);
+      await this.telegram.handleUpdate(update, sink);
     } catch (error) {
       // Always answer 200 so Telegram does not retry the same update forever.
       this.logger.error(`Failed to handle update ${update?.update_id}`, error as Error);
     }
 
-    return { ok: true };
+    return sink ? { ok: true, replies: sink } : { ok: true };
   }
 
   private assertSecret(received: string | undefined): void {

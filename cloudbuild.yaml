@@ -25,16 +25,32 @@ steps:
       # ENV_VAR=SECRET_NAME:version. Secret Manager names are case-sensitive and must match the
       # secrets in this project exactly. ALLOWED_USERS goes through Secret Manager too, so its
       # comma-separated value cannot collide with the comma that separates entries in this flag.
-      - --set-secrets=TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_WEBHOOK_SECRET=TELEGRAM_WEBHOOK_SECRET:latest,ALLOWED_USERS=ALLOWED_USERS:latest
+      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=ALLOWED_USERS:latest
       # Not secret, so plain env vars. Transcription needs no API key: the function calls Vertex AI
       # as its own runtime service account. It only needs to know which project and endpoint to
       # talk to. Declared here rather than left to code defaults so the model id is visible and
       # changeable at the deploy boundary. No value may contain a comma: this flag splits on them.
-      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300
+      # DEFAULT_TIMEZONE turns "tomorrow at 9" into a real instant, so a wrong value is a wrong
+      # reminder time rather than an error. The code default is UTC; the real zone is declared here
+      # at the deploy boundary. Kyiv observes DST (UTC+3 summer, UTC+2 winter), which is exactly why
+      # recurring reminders must be stored as local wall-clock plus zone, never as a UTC instant.
+      # TEST_REFLECT_REPLY and FIRESTORE_DATABASE are driven by substitutions: production keeps the
+      # safe defaults (reflection off, default database), the `testing` trigger overrides them.
+      # FIRESTORE_DATABASE is declared now so the `test` store is wired before phase 0 reads it; no
+      # code reads it yet.
+      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,CLASSIFIER_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300,DEFAULT_TIMEZONE=Europe/Kyiv,TEST_REFLECT_REPLY=${_REPLY_REFLECT},FIRESTORE_DATABASE=${_FIRESTORE_DB}
 
 substitutions:
   _FUNCTION_NAME: telegram-echo-bot
   _REGION: europe-west1
+  # Production defaults. The `testing` trigger (branch `testing`) overrides these to deploy an
+  # isolated second function from this same file - see docs/specs/README.md:
+  #   _FUNCTION_NAME=telegram-echo-bot-test  _TOKEN_SECRET=TELEGRAM_BOT_TOKEN_TEST
+  #   _WEBHOOK_SECRET_NAME=TELEGRAM_WEBHOOK_SECRET_TEST  _REPLY_REFLECT=true  _FIRESTORE_DB=test
+  _TOKEN_SECRET: TELEGRAM_BOT_TOKEN
+  _WEBHOOK_SECRET_NAME: TELEGRAM_WEBHOOK_SECRET
+  _REPLY_REFLECT: 'false'
+  _FIRESTORE_DB: '(default)'
 
 options:
   logging: CLOUD_LOGGING_ONLY

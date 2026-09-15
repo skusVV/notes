@@ -37,6 +37,8 @@ All sensitive values come from the environment, never from source:
 | `GOOGLE_APPLICATION_CREDENTIALS` | Local dev only, and only to transcribe locally. Path to a service-account JSON key. |
 | `VERTEX_LOCATION` | Optional. Defaults to `global`, which is ~10% cheaper than a pinned region. |
 | `TRANSCRIPTION_MODEL` | Optional. Defaults to `gemini-3.5-flash-lite`. |
+| `CLASSIFIER_MODEL` | Optional. Defaults to `gemini-3.5-flash-lite`. Model that sorts each message into note / reminder / symptom / question / actor_info / correction / other. |
+| `DEFAULT_TIMEZONE` | IANA zone used to resolve "tomorrow at 9" into a real time. Code default is `UTC`; deployed as `Europe/Kyiv` via `cloudbuild.yaml`. An invalid name falls back to UTC with a startup warning rather than throwing. |
 | `MAX_VOICE_SECONDS` | Optional, default `300`. Longer voice messages are refused without being downloaded. |
 | `PORT` | Local dev only. |
 
@@ -275,9 +277,24 @@ secret, the function name, or the region.
   id, and the attempt is logged as `Denied user <id>: not in ALLOWED_USERS`. Updates with no
   identifiable sender (channel posts, for example) are refused too. Changing the list means adding a
   new secret version and starting a new revision, since env-var secrets resolve at instance start.
-- **Voice messages** are transcribed and the text is sent back. Telegram records voice notes as
+- **Every message is classified** into `note`, `reminder`, `symptom`, `question`, `actor_info`,
+  `correction` or `other`, and the bot replies with what it understood - the intent plus whatever
+  fields it could extract. One message can produce **several** intents ("I have a headache and
+  remind me to call the doctor" is a symptom *and* a reminder) and each is reported separately.
+  **Nothing is stored yet**, so every reply ends with a note saying so; the classifier is what got
+  built first, and persistence is the next step (see [docs/architecture.md](docs/architecture.md)).
+- A field the message did not state stays **absent** rather than being guessed - a reminder with no
+  lead time says so, and a symptom with no stated severity says so. Confidence below 0.5 makes the
+  bot ask instead of filing; between 0.5 and 0.8 it acts but shows the score so a misread is
+  visible. If the model call fails entirely the message falls back to `other` and the reply still
+  goes out, because a classification failure must never swallow a message.
+- **Commands never reach the model.** Anything starting with `/` is routed in code, which matters
+  because Telegram sends `/start` on first contact. `/start` and `/help` print usage.
+- **Voice messages** are transcribed, and the transcript is quoted back above the classification
+  so you can see what speech recognition actually heard. Telegram records voice notes as
   Opus in an OGG container and Gemini accepts `audio/ogg` directly, so nothing transcodes the audio
-  and there is no ffmpeg in the image. A transcript longer than Telegram's 4096-character limit is
+  and there is no ffmpeg in the image. The language is auto-detected per message - verified with
+  Ukrainian and English - so there is nothing to configure and no need to declare a language. A transcript longer than Telegram's 4096-character limit is
   split across several replies. Only the duration and transcript *length* are logged, never the
   text, since these are private notes.
 - The allowlist is checked **before** a voice message is downloaded or sent to the model, so a

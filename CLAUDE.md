@@ -9,6 +9,11 @@ Function**, redeployed automatically by a Cloud Build GitHub push trigger. The r
 function source (`--source=.` in [cloudbuild.yaml](cloudbuild.yaml)) - do not move the app into a
 subfolder without also updating the trigger's `--build-config` and the deploy step.
 
+Planned next: a persistence layer turning the bot into a personal memory (reminders, symptom
+tracking, notes, retrieval, people). Nothing is implemented yet - the design, the build order and
+the decisions already settled live in [docs/architecture.md](docs/architecture.md). Read it before
+adding storage, a classifier, or anything scheduled.
+
 
 ## Commands
 
@@ -99,11 +104,42 @@ The cost is that a laptop has no GCP identity, so transcribing locally needs
 deployed bot avoids that entirely.
 
 Nothing decodes audio - Telegram voice notes are Opus-in-OGG and Gemini takes `audio/ogg` inline, so
-there is no ffmpeg step to maintain. Unlike `TelegramService`, this service **must not throw** when
+there is no ffmpeg step to maintain. Both facts are verified against the deployed bot, including
+Ukrainian and English in the same setup: Gemini auto-detects the language, so no language codes are
+passed or needed. That is a reason to stay on Gemini rather than Cloud Speech-to-Text, which wants
+an explicit `languageCodes` list per request. Unlike `TelegramService`, this service **must not throw** when
 unconfigured: with no `GCP_PROJECT` it logs a warning, `available` returns false, and voice messages
 get a "not configured" reply so text echo keeps working. Because credentials resolve lazily, a
 missing **Vertex AI User** grant does not fail construction - it surfaces as a `PERMISSION_DENIED`
 on the first `transcribe()` call, caught by `handleVoice`.
+
+**Classification is the branch point, behind the same kind of boundary as transcription.**
+`ClassifierService` ([src/classifier/classifier.service.ts](src/classifier/classifier.service.ts))
+takes a message plus a `ClassifierContext` and returns `ClassificationResult` - an **array** of
+intents, not one label, because "I have a headache and remind me to call the doctor" is legitimately
+two. It uses Gemini structured output (`responseMimeType: 'application/json'` plus a
+`responseSchema`) at `temperature: 0`, so the same message does not land in two different places on
+two tries. Like `TranscriptionService` it must **not throw** when `GCP_PROJECT` is missing: `available`
+returns false and `TelegramService` falls back to plain echo.
+
+Three invariants in that file are deliberate and easy to break. First, `parse`/`coerceItem` never
+propagate a bad model response - unknown intents are dropped, out-of-range confidence is clamped,
+and anything unusable becomes a single `other` item via `fallbackResult`, because a malformed reply
+must not turn into a 500. Second, an intent whose payload fails validation (a `reminder` with no
+title, a `symptom` with no type) has its confidence forced *below* `CONFIDENCE_ASK` rather than being
+repaired, so the existing clarify branch handles it instead of the bot inventing the missing half.
+Third, absent fields stay absent - `severity` in particular is never inferred from words like
+"bad", since one fabricated number corrupts every later average. `ClassifierContext` already carries
+`knownSymptomTypes`, `knownActors` and `previousText`; they are passed empty until Firestore lands,
+and filling them is what stops the model minting a new slug for every wording.
+
+`TelegramService.route` is the branch table: text and voice converge there, one handler per intent,
+and each handler currently only *composes a reply* because nothing is persisted yet. Commands are
+routed before classification (`text.startsWith('/')`) - load-bearing, because Telegram sends
+`/start` on first contact and it would otherwise be classified as prose. Replies deliberately set no
+`parse_mode`: they embed the user's own words, and Markdown would break on a stray underscore in a
+transcript. The `NOT_STORED_NOTICE` on every reply exists so the bot never implies it kept
+something; delete it in the same change that adds storage.
 
 **Two ordering rules in `handleUpdate` are load-bearing.** The `ALLOWED_USERS` gate must run
 *before* any voice download or model call, otherwise a stranger can run up the Gemini bill; and the

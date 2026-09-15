@@ -1,6 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { ClassifierService } from '../classifier/classifier.service';
+import {
+  Classification,
+  ClassificationResult,
+  CONFIDENCE_ASK,
+  CONFIDENCE_QUIET,
+  fallbackResult,
+} from '../classifier/classifier.types';
 import { TranscriptionService } from '../transcription/transcription.service';
 import {
   TelegramApiResponse,
@@ -20,6 +28,19 @@ const MAX_VOICE_BYTES = 15 * 1024 * 1024;
 
 // sendMessage rejects anything longer, and a few minutes of speech transcribes past it.
 const MAX_MESSAGE_CHARS = 4096;
+
+// Until entries are persisted, every reply has to say so - the bot must not imply it kept
+// anything. Remove this the moment Firestore lands (phase 0 in docs/architecture.md).
+const NOT_STORED_NOTICE = '(classifier preview - nothing is stored yet)';
+
+const HELP_TEXT = [
+  'Send me a note, a reminder, a symptom, or a question - typed or as a voice message.',
+  '',
+  'I work out which one it is and show you what I understood.',
+  'Storage is not built yet, so nothing is kept between messages.',
+  '',
+  '/help - this message',
+].join('\n');
 
 function describeSender(from: TelegramUser | undefined): string {
   if (!from) {
@@ -67,6 +88,7 @@ export class TelegramService {
   constructor(
     private readonly config: ConfigService,
     private readonly transcription: TranscriptionService,
+    private readonly classifier: ClassifierService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -142,7 +164,10 @@ export class TelegramService {
     return from !== undefined && this.allowedUsers.has(from.id);
   }
 
-  async handleUpdate(update: TelegramUpdate): Promise<void> {
+  // `sink`, when provided, collects every reply this update produces. The test function passes one
+  // (via TEST_REFLECT_REPLY) so the verifier can read replies straight from the HTTP response
+  // without a GCP identity; production passes nothing and behaviour is unchanged.
+  async handleUpdate(update: TelegramUpdate, sink?: string[]): Promise<void> {
     const message = update.message ?? update.edited_message;
     if (!message) {
       this.logger.log(`Ignoring update ${update.update_id}: no message`);
@@ -163,34 +188,58 @@ export class TelegramService {
       `Received ${voice ? 'voice' : 'text'} message from ${sender} in chat ${message.chat.id}`,
     );
 
-    // The gate must precede voice handling, which downloads a file and calls a paid model.
+    // The gate must precede voice handling and classification, both of which cost money.
     if (!this.isAllowed(message.from)) {
       this.logger.warn(`Denied ${sender}: not in ALLOWED_USERS`);
-      await this.sendMessage(message.chat.id, 'Sorry, you are not allowed to use this bot.');
+      await this.sendMessage(message.chat.id, 'Sorry, you are not allowed to use this bot.', sink);
       return;
     }
 
-    if (text) {
-      await this.sendMessage(message.chat.id, text);
-      this.logger.log(`Echoed message back to ${sender}`);
+    // Commands are routed deterministically and never reach the model. Telegram sends /start
+    // on first contact, so without this the very first message would be classified as prose.
+    if (text?.startsWith('/')) {
+      await this.handleCommand(message.chat.id, text, sender, sink);
       return;
     }
 
     if (voice) {
-      await this.handleVoice(message, voice, sender);
+      await this.handleVoice(message, voice, sender, sink);
+      return;
     }
+
+    if (text) {
+      await this.route(message.chat.id, text, sender, undefined, sink);
+    }
+  }
+
+  private async handleCommand(
+    chatId: number,
+    text: string,
+    sender: string,
+    sink?: string[],
+  ): Promise<void> {
+    const command = text.split(/\s+/)[0].split('@')[0].toLowerCase();
+    this.logger.log(`Handling command ${command} from ${sender}`);
+
+    if (command === '/start' || command === '/help') {
+      await this.sendMessage(chatId, HELP_TEXT, sink);
+      return;
+    }
+
+    await this.sendMessage(chatId, `I do not know ${command}. Try /help.`, sink);
   }
 
   private async handleVoice(
     message: TelegramMessage,
     voice: TelegramVoice,
     sender: string,
+    sink?: string[],
   ): Promise<void> {
     const chatId = message.chat.id;
 
     if (!this.transcription.available) {
       this.logger.warn(`Cannot transcribe for ${sender}: transcription is not configured`);
-      await this.sendMessage(chatId, 'Voice transcription is not configured on this bot yet.');
+      await this.sendMessage(chatId, 'Voice transcription is not configured on this bot yet.', sink);
       return;
     }
 
@@ -201,38 +250,214 @@ export class TelegramService {
       await this.sendMessage(
         chatId,
         `That voice message is ${voice.duration}s long. I only transcribe up to ${this.maxVoiceSeconds}s.`,
+        sink,
       );
       return;
     }
 
     if (voice.file_size !== undefined && voice.file_size > MAX_VOICE_BYTES) {
       this.logger.warn(`Rejected ${voice.file_size} byte voice message from ${sender}: too large`);
-      await this.sendMessage(chatId, 'That voice message is too large for me to transcribe.');
+      await this.sendMessage(chatId, 'That voice message is too large for me to transcribe.', sink);
       return;
     }
 
+    let transcript: string;
     try {
       await this.indicateWork(chatId);
 
       const audio = await this.downloadFile(voice.file_id);
-      const transcript = await this.transcription.transcribe(
-        audio,
-        voice.mime_type ?? 'audio/ogg',
-      );
+      transcript = await this.transcription.transcribe(audio, voice.mime_type ?? 'audio/ogg');
 
       // Log the length, not the text: these are the user's private notes.
       this.logger.log(
         `Transcribed ${voice.duration}s of audio from ${sender} into ${transcript.length} chars`,
       );
-
-      await this.sendMessage(
-        chatId,
-        transcript || 'I could not hear any speech in that voice message.',
-      );
     } catch (error) {
       this.logger.error(`Failed to transcribe voice message from ${sender}`, error as Error);
-      await this.sendMessage(chatId, 'Sorry, I could not transcribe that voice message.');
+      await this.sendMessage(chatId, 'Sorry, I could not transcribe that voice message.', sink);
+      return;
     }
+
+    if (!transcript) {
+      await this.sendMessage(chatId, 'I could not hear any speech in that voice message.', sink);
+      return;
+    }
+
+    // Voice and text converge here: from this point nothing downstream knows which it was.
+    // The transcript is echoed because it is the user's only evidence that speech recognition
+    // heard them correctly.
+    await this.route(chatId, transcript, sender, `"${transcript}"`, sink);
+  }
+
+  /**
+   * The branch point. Classifies the message, then dispatches each intent to its own handler.
+   * A classification failure degrades to `other` rather than blocking the reply.
+   */
+  private async route(
+    chatId: number,
+    text: string,
+    sender: string,
+    prefix?: string,
+    sink?: string[],
+  ): Promise<void> {
+    if (!this.classifier.available) {
+      this.logger.warn(`Cannot classify for ${sender}: classifier is not configured`);
+      await this.sendMessage(chatId, [prefix, text].filter(Boolean).join('\n\n'), sink);
+      return;
+    }
+
+    let result: ClassificationResult;
+    try {
+      if (!prefix) {
+        // Voice already showed a typing hint before transcribing.
+        await this.indicateWork(chatId);
+      }
+
+      result = await this.classifier.classify(text, {
+        timezone: this.classifier.defaultTimezone,
+        // Empty until Firestore lands. The shape is here now so phase 0 only fills it in:
+        // known vocabulary is what stops the model inventing a new slug for every wording,
+        // and previousText is the only way a correction can be recognised.
+        knownSymptomTypes: [],
+        knownActors: [],
+        previousText: undefined,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to classify message from ${sender}`, error as Error);
+      result = fallbackResult(text);
+    }
+
+    this.logger.log(
+      `Classified message from ${sender} as [${result.items
+        .map((item) => `${item.intent} ${item.confidence.toFixed(2)}`)
+        .join(', ')}] lang=${result.language} mentions=${result.mentions.length}`,
+    );
+
+    const lines: string[] = [];
+    if (prefix) {
+      lines.push(prefix, '');
+    }
+
+    let needsClarification = false;
+    for (const item of result.items) {
+      if (item.confidence < CONFIDENCE_ASK) {
+        needsClarification = true;
+        lines.push(this.describeUnsure(item));
+        continue;
+      }
+
+      lines.push(this.describeItem(item, result));
+    }
+
+    if (needsClarification) {
+      lines.push('', 'Which is it - a note, a reminder, a symptom, or a question?');
+    }
+
+    lines.push('', NOT_STORED_NOTICE);
+    await this.sendMessage(chatId, lines.join('\n'), sink);
+  }
+
+  /**
+   * One branch per intent. Each of these becomes a write once Firestore exists; for now the
+   * branch is where the reply is composed, so the routing itself is observable.
+   */
+  private describeItem(item: Classification, result: ClassificationResult): string {
+    switch (item.intent) {
+      case 'reminder':
+        return this.describeReminder(item);
+      case 'symptom':
+        return this.describeSymptom(item);
+      case 'question':
+        return this.describeQuestion(item);
+      case 'actor_info':
+        return this.withConfidence(
+          `About ${result.mentions.join(', ') || 'someone'}: ${item.summary}`,
+          item,
+        );
+      case 'correction':
+        // Correction needs the previous message, which nothing stores yet.
+        return this.withConfidence(
+          `Correction: ${item.summary}\nI cannot apply it yet - nothing is stored to correct.`,
+          item,
+        );
+      case 'note':
+        return this.withConfidence(`Note: ${item.summary}`, item);
+      case 'other':
+      default:
+        return `Not sure what that was, so I would keep it as a plain note.`;
+    }
+  }
+
+  private describeReminder(item: Classification): string {
+    const reminder = item.reminder;
+    if (!reminder) {
+      return this.withConfidence(`Reminder: ${item.summary}`, item);
+    }
+
+    const details: string[] = [`Reminder: ${reminder.title}`];
+    details.push(reminder.eventAt ? `when: ${reminder.eventAt}` : 'when: not stated');
+    details.push(
+      reminder.leadMinutes === undefined
+        ? 'lead time: not stated, I would ask'
+        : `lead time: ${reminder.leadMinutes} min before`,
+    );
+    if (reminder.recurrence) {
+      details.push(`repeats: ${reminder.recurrence}`);
+    }
+
+    return this.withConfidence(details.join('\n'), item);
+  }
+
+  private describeSymptom(item: Classification): string {
+    const symptom = item.symptom;
+    if (!symptom) {
+      return this.withConfidence(`Symptom: ${item.summary}`, item);
+    }
+
+    const details: string[] = [`Symptom: ${symptom.type}`];
+    details.push(
+      symptom.severity === undefined
+        ? 'severity: not stated'
+        : `severity: ${symptom.severity}/10`,
+    );
+    if (symptom.startedAt) {
+      details.push(`started: ${symptom.startedAt}`);
+    }
+    if (symptom.durationMinutes !== undefined) {
+      details.push(`lasted: ${symptom.durationMinutes} min`);
+    }
+
+    return this.withConfidence(details.join('\n'), item);
+  }
+
+  private describeQuestion(item: Classification): string {
+    const question = item.question;
+    const details: string[] = [`Question (${question?.shape ?? 'semantic'})`];
+    if (question?.topic) {
+      details.push(`topic: ${question.topic}`);
+    }
+    if (question?.symptomType) {
+      details.push(`symptom: ${question.symptomType}`);
+    }
+    if (question?.from || question?.to) {
+      details.push(`range: ${question.from ?? 'any'} to ${question.to ?? 'now'}`);
+    }
+    details.push('I cannot answer it yet - there is no history to search.');
+
+    return this.withConfidence(details.join('\n'), item);
+  }
+
+  private describeUnsure(item: Classification): string {
+    const guess = item.intent === 'other' ? 'anything I handle' : item.intent;
+    return `I am not confident this is ${guess} (${item.confidence.toFixed(2)}): ${item.summary}`;
+  }
+
+  /** The middle confidence band is shown, so a plausible-but-wrong reading is catchable. */
+  private withConfidence(body: string, item: Classification): string {
+    if (item.confidence >= CONFIDENCE_QUIET) {
+      return body;
+    }
+    return `${body}\nnot fully sure (${item.confidence.toFixed(2)})`;
   }
 
   private async downloadFile(fileId: string): Promise<Buffer> {
@@ -249,7 +474,7 @@ export class TelegramService {
     return Buffer.from(response.data);
   }
 
-  /** Cosmetic "typing" hint. Transcription takes seconds, and silence reads as a broken bot. */
+  /** Cosmetic "typing" hint. The model takes seconds, and silence reads as a broken bot. */
   private async indicateWork(chatId: number): Promise<void> {
     try {
       await this.api.post('/sendChatAction', { chat_id: chatId, action: 'typing' });
@@ -258,9 +483,29 @@ export class TelegramService {
     }
   }
 
-  private async sendMessage(chatId: number, text: string): Promise<void> {
-    for (const chunk of splitForTelegram(text)) {
-      await this.api.post('/sendMessage', { chat_id: chatId, text: chunk });
+  private async sendMessage(chatId: number, text: string, sink?: string[]): Promise<void> {
+    // Deliberately no parse_mode: replies embed the user's own words, and Markdown or HTML
+    // would break on any stray underscore or angle bracket in a transcript.
+    const chunks = splitForTelegram(text);
+
+    // Reflect mode (test function only): record every chunk so the verifier can read replies from
+    // the HTTP response, and tolerate a failing Telegram send so a throwaway chat id does not abort
+    // the rest. Production passes no sink, so behaviour and error propagation are unchanged.
+    if (sink) {
+      sink.push(...chunks);
+    }
+
+    for (const chunk of chunks) {
+      try {
+        await this.api.post('/sendMessage', { chat_id: chatId, text: chunk });
+      } catch (error) {
+        if (!sink) {
+          throw error;
+        }
+        this.logger.warn(
+          `reflect: sendMessage to chat ${chatId} failed: ${(error as Error).message}`,
+        );
+      }
     }
   }
 }

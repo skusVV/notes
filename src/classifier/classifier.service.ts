@@ -69,7 +69,18 @@ const RESPONSE_SCHEMA: Schema = {
                 type: Type.STRING,
                 description:
                   'When the event itself happens, ISO 8601 with offset, resolved from the ' +
-                  'current local time given below. Omit if the message gives no time at all.',
+                  'current local time given below. Emit ONLY when the message gives both a ' +
+                  'specific date AND an explicit clock time. Omit entirely otherwise - never ' +
+                  'copy or assume the time of day from the current local time.',
+              },
+              hasTimeOfDay: {
+                type: Type.BOOLEAN,
+                description:
+                  'true ONLY if the message states an explicit clock time (e.g. "at 12", ' +
+                  '"18:00", "noon", "half past nine"). false when it names only a date or a ' +
+                  'weekday with no time. Judge the words the user actually said - do NOT set ' +
+                  'true just because eventAt has a time; the current local time is not a time ' +
+                  'the user gave.',
               },
               leadMinutes: {
                 type: Type.INTEGER,
@@ -82,8 +93,8 @@ const RESPONSE_SCHEMA: Schema = {
                 description: 'Plain description if it repeats, e.g. "every day at 09:00".',
               },
             },
-            required: ['title'],
-            propertyOrdering: ['title', 'eventAt', 'leadMinutes', 'recurrence'],
+            required: ['title', 'hasTimeOfDay'],
+            propertyOrdering: ['title', 'eventAt', 'hasTimeOfDay', 'leadMinutes', 'recurrence'],
           },
           symptom: {
             type: Type.OBJECT,
@@ -250,11 +261,20 @@ export class ClassifierService {
       `Current local time: ${now} (timezone ${timezone}).`,
       'Resolve every relative date and time against that "now", and emit eventAt as ISO 8601 with',
       "the user's local offset. Date-resolution rules:",
-      '- Emit eventAt ONLY when both a specific date and a specific time of day are determinable.',
-      '  If either is unclear, omit eventAt rather than guessing a date or a time.',
+      '- Emit eventAt ONLY when the message gives BOTH a specific date AND an explicit time of day.',
+      '  If either is missing, omit eventAt and set hasTimeOfDay=false.',
+      '- The current local time above is context for resolving dates, NOT a default time. Never copy',
+      '  its hour/minute into eventAt. If the user named no clock time, there is no time to emit.',
+      '- Set hasTimeOfDay=true only when the user stated an explicit clock time ("at 12", "18:00",',
+      '  "noon"); set it false for a date/weekday with no time.',
       '- A bare weekday ("Thursday") means its next occurrence strictly after now.',
       '- "next {weekday}" means the occurrence in the following week, not tomorrow.',
       '- "the Nth" means the next occurrence of that day-of-month that is not before today.',
+      'Examples (now = Wednesday):',
+      '- "remind me on Thursday at 12 to get a haircut" -> eventAt = Thursday 12:00 local,',
+      '  hasTimeOfDay=true.',
+      '- "remind me on Thursday to call the doctor" -> NO time of day given, so omit eventAt and set',
+      '  hasTimeOfDay=false. Do NOT reuse the current time.',
       '',
       'Rules that matter more than being helpful:',
       '- Omit any field the user did not actually state. An absent value is correct; a guessed',
@@ -401,8 +421,15 @@ export class ClassifierService {
     // the missing part, drop the confidence so the router's clarify branch picks it up. A reminder
     // needs a resolvable future eventAt too: with no clear time it must be asked about, never
     // stored with a guessed time (invent-nothing).
+    //
+    // hasTimeOfDay is a deterministic, code-enforced signal: the model reports whether the message
+    // stated an explicit clock time. A model that copies the hour from "now" still produces a
+    // valid-looking instant, which normalizeEventAt cannot catch - so a reminder whose time of day
+    // was not actually stated is treated as unresolved even when eventAt parses.
+    const hasTimeOfDay = reminder?.hasTimeOfDay === true;
     const reminderUnresolved =
-      intent === 'reminder' && (!item.reminder || !normalizeEventAt(item.reminder.eventAt, now));
+      intent === 'reminder' &&
+      (!item.reminder || !hasTimeOfDay || !normalizeEventAt(item.reminder.eventAt, now));
     const needsPayload = reminderUnresolved || (intent === 'symptom' && !item.symptom);
     if (needsPayload) {
       this.logger.warn(`Classifier returned ${intent} without a usable payload`);

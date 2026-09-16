@@ -14,6 +14,7 @@ vi.mock('@google/genai', () => ({
     ARRAY: 'ARRAY',
     NUMBER: 'NUMBER',
     INTEGER: 'INTEGER',
+    BOOLEAN: 'BOOLEAN',
   },
 }));
 
@@ -51,8 +52,12 @@ describe('ClassifierService reminder validation', () => {
   });
 
   // acceptance: reminder-stored (a resolvable reminder stays actionable)
-  it('keeps confidence for a reminder with a resolvable future eventAt', async () => {
-    replyWithReminder(0.95, { title: 'haircut', eventAt: '2026-09-17T12:00:00+03:00' });
+  it('keeps confidence for a reminder with a resolvable future eventAt and a stated time', async () => {
+    replyWithReminder(0.95, {
+      title: 'haircut',
+      eventAt: '2026-09-17T12:00:00+03:00',
+      hasTimeOfDay: true,
+    });
 
     const result = await classifier.classify('haircut on Thursday at 12', context);
 
@@ -63,15 +68,35 @@ describe('ClassifierService reminder validation', () => {
 
   // acceptance: missing-time-not-stored (no time -> pushed below ASK -> clarify, never stored)
   it('forces confidence below CONFIDENCE_ASK when eventAt is absent', async () => {
-    replyWithReminder(0.95, { title: 'call the doctor' });
+    replyWithReminder(0.95, { title: 'call the doctor', hasTimeOfDay: false });
 
     const result = await classifier.classify('remind me to call the doctor on Thursday', context);
 
     expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
   });
 
+  // acceptance: missing-time-not-stored (the live bug: model names a date but no time and copies
+  // the clock from "now", yielding a valid-but-fabricated instant). hasTimeOfDay=false is the
+  // deterministic signal that drops it to clarify even though eventAt parses as a real future time.
+  it('forces confidence below CONFIDENCE_ASK when a date is given but no time of day', async () => {
+    replyWithReminder(0.95, {
+      title: 'call the doctor',
+      // A fabricated-but-valid future instant (the hour copied from "now").
+      eventAt: '2026-09-17T09:00:00+03:00',
+      hasTimeOfDay: false,
+    });
+
+    const result = await classifier.classify('remind me on Thursday to call the doctor', context);
+
+    expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+  });
+
   it('forces confidence below CONFIDENCE_ASK when eventAt is in the past', async () => {
-    replyWithReminder(0.95, { title: 'old thing', eventAt: '2026-09-15T12:00:00+03:00' });
+    replyWithReminder(0.95, {
+      title: 'old thing',
+      eventAt: '2026-09-15T12:00:00+03:00',
+      hasTimeOfDay: true,
+    });
 
     const result = await classifier.classify('remind me yesterday', context);
 
@@ -79,7 +104,11 @@ describe('ClassifierService reminder validation', () => {
   });
 
   it('forces confidence below CONFIDENCE_ASK when eventAt carries no offset', async () => {
-    replyWithReminder(0.95, { title: 'ambiguous', eventAt: '2026-09-17T12:00:00' });
+    replyWithReminder(0.95, {
+      title: 'ambiguous',
+      eventAt: '2026-09-17T12:00:00',
+      hasTimeOfDay: true,
+    });
 
     const result = await classifier.classify('remind me Thursday noon', context);
 

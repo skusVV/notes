@@ -33,7 +33,8 @@ All sensitive values come from the environment, never from source:
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. Required. |
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
 | `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a refusal message naming their own id. Empty or unset allows everyone. |
-| `GCP_PROJECT` | GCP project used for Vertex AI transcription. No API key involved. If unset, voice messages are refused politely and text echo keeps working. Set automatically on deploy. |
+| `GCP_PROJECT` | GCP project used for Vertex AI transcription/classification and Firestore. No API key involved. If unset, voice messages are refused politely, classification degrades to plain echo, and reminders are not stored - text echo keeps working. Set automatically on deploy. |
+| `FIRESTORE_DATABASE` | Firestore database id reminders are stored in. Code default `(default)`; deployed as `(default)` in production and `test` on the test function via `cloudbuild.yaml`, so the test lane never touches production data. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Local dev only, and only to transcribe locally. Path to a service-account JSON key. |
 | `VERTEX_LOCATION` | Optional. Defaults to `global`, which is ~10% cheaper than a pinned region. |
 | `TRANSCRIPTION_MODEL` | Optional. Defaults to `gemini-3.5-flash-lite`. |
@@ -164,6 +165,25 @@ function already runs as permission to call the model. Without it, text echo wor
 message replies "Sorry, I could not transcribe that voice message." and the function logs a
 `PERMISSION_DENIED` from `aiplatform.googleapis.com`.
 
+### 3c. Create the Firestore databases and let the function use them
+
+Reminders are stored in Firestore, so create two databases and grant access.
+
+1. **Firestore -> Create database.** Choose **Native** mode (not Datastore). Set the location to
+   **`europe-west1`** - this choice is **permanent** for a database and cannot be changed later.
+   Leave the id as `(default)`. This is the production store.
+2. **Firestore -> Create database** again for the test lane: **Native** mode, location
+   **`europe-west1`**, and this time set the **database id to `test`**. The test function runs with
+   `FIRESTORE_DATABASE=test` (via `cloudbuild.yaml`), so nothing it does touches production data.
+3. **IAM & Admin -> IAM**, find `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`, click the
+   pencil, **Add another role**, and pick **Cloud Datastore User** (`roles/datastore.user`). Save.
+   This one grant covers both databases. Without it, text and classification still work but every
+   reminder replies that it could not be stored.
+4. Add a **Time-to-live (TTL)** policy so expired reminders are reaped automatically. On **each**
+   database (`(default)` and `test`): **Firestore -> TTL -> Create policy**, collection group
+   **`reminders`**, timestamp field **`expireAt`**. Each stored reminder sets `expireAt` to its
+   event time plus 24 hours.
+
 ### 4. Let Cloud Build deploy the function
 
 **IAM & Admin -> IAM**, tick **Include Google-provided role grants** at the top right, find the
@@ -281,8 +301,18 @@ secret, the function name, or the region.
   `correction` or `other`, and the bot replies with what it understood - the intent plus whatever
   fields it could extract. One message can produce **several** intents ("I have a headache and
   remind me to call the doctor" is a symptom *and* a reminder) and each is reported separately.
-  **Nothing is stored yet**, so every reply ends with a note saying so; the classifier is what got
-  built first, and persistence is the next step (see [docs/architecture.md](docs/architecture.md)).
+  **Reminders with a clear date and time are now stored** in Firestore; the other intents are still
+  only previewed, so a reply that did not store everything it acted on still ends with a note saying
+  so (see [docs/architecture.md](docs/architecture.md)).
+- **Reminders are captured, resolved, and stored.** The classifier is told the current local time,
+  so "haircut on Thursday at 12" is resolved to a concrete instant and written to
+  `users/{userId}/reminders/{autoId}`. A reminder that names no clear time is **not** stored - the
+  bot asks rather than guessing. `/export` replies with the requesting user's stored reminders as a
+  single JSON object `{"reminders":[...]}`. Delivery (a due-reminder message) is a later step.
+- **`X-Test-Now` is test-only.** On the test function (`TEST_REFLECT_REPLY=true`) an
+  `X-Test-Now: 2026-09-16T09:00:00+03:00` header pins "now" for that one request, so relative-date
+  resolution is deterministic in verification. Production has reflection off and ignores the header
+  entirely - the same trust boundary as reply reflection.
 - A field the message did not state stays **absent** rather than being guessed - a reminder with no
   lead time says so, and a symptom with no stated severity says so. Confidence below 0.5 makes the
   bot ask instead of filing; between 0.5 and 0.8 it acts but shows the score so a misread is

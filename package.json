@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^8.7.1",
     "@google-cloud/functions-framework": "^3.4.2",
     "@google/genai": "^2.18.0",
     "@nestjs/common": "^11.2.1",
@@ -22,12 +23,14 @@
     "@nestjs/platform-express": "^11.2.1",
     "axios": "^1.7.9",
     "express": "^5.2.1",
+    "luxon": "^3.7.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.24",
     "@types/express": "^5.0.6",
+    "@types/luxon": "^3.7.5",
     "@types/node": "^20.17.12",
     "typescript": "^5.7.3",
     "vitest": "^4.1.11"

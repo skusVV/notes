@@ -12,6 +12,7 @@ vi.mock('axios', () => {
   return { default: { create: vi.fn(() => instance) }, create: vi.fn(() => instance) };
 });
 
+import { ClockService } from '../src/clock/clock.service';
 import { TelegramService } from '../src/telegram/telegram.service';
 import { TelegramUpdate } from '../src/telegram/telegram.types';
 
@@ -32,11 +33,15 @@ function makeService(): TelegramService {
   };
   const transcription = { available: false } as unknown;
   const classifier = { available: false } as unknown;
+  const reminders = { available: false } as unknown;
+  const clock = new ClockService();
 
   return new TelegramService(
     config as never,
     transcription as never,
     classifier as never,
+    reminders as never,
+    clock,
   );
 }
 

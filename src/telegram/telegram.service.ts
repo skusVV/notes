@@ -11,6 +11,9 @@ import {
   CONFIDENCE_QUIET,
   fallbackResult,
 } from '../classifier/classifier.types';
+import { ClockService } from '../clock/clock.service';
+import { normalizeEventAt } from '../reminders/event-at';
+import { RemindersService } from '../reminders/reminders.service';
 import { TranscriptionService } from '../transcription/transcription.service';
 import {
   TelegramApiResponse,
@@ -41,16 +44,18 @@ const MAX_VOICE_BYTES = 15 * 1024 * 1024;
 // sendMessage rejects anything longer, and a few minutes of speech transcribes past it.
 const MAX_MESSAGE_CHARS = 4096;
 
-// Until entries are persisted, every reply has to say so - the bot must not imply it kept
-// anything. Remove this the moment Firestore lands (phase 0 in docs/architecture.md).
-const NOT_STORED_NOTICE = '(classifier preview - nothing is stored yet)';
+// Reminders are stored now, but the other intents are still only previewed. This notice is
+// appended only to a reply that did NOT store everything it acted on, so it never contradicts a
+// reminder the bot actually kept. Remove it as each remaining intent gains storage.
+const NOT_STORED_NOTICE = '(only reminders are stored so far - other kinds of message are not kept yet)';
 
 const HELP_TEXT = [
   'Send me a note, a reminder, a symptom, or a question - typed or as a voice message.',
   '',
   'I work out which one it is and show you what I understood.',
-  'Storage is not built yet, so nothing is kept between messages.',
+  'Reminders with a clear date and time are saved; other kinds are not kept yet.',
   '',
+  '/export - show your stored reminders as JSON',
   '/help - this message',
 ].join('\n');
 
@@ -101,6 +106,8 @@ export class TelegramService {
     private readonly config: ConfigService,
     private readonly transcription: TranscriptionService,
     private readonly classifier: ClassifierService,
+    private readonly reminders: RemindersService,
+    private readonly clock: ClockService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -179,12 +186,19 @@ export class TelegramService {
   // `sink`, when provided, collects every reply this update produces. The test function passes one
   // (via TEST_REFLECT_REPLY) so the verifier can read replies straight from the HTTP response
   // without a GCP identity; production passes nothing and behaviour is unchanged.
-  async handleUpdate(update: TelegramUpdate, sink?: string[]): Promise<void> {
+  //
+  // `nowOverride` is the X-Test-Now value, forwarded only by the test function (same trust boundary
+  // as `sink`); it pins "now" for this one update so relative-date resolution is deterministic.
+  async handleUpdate(update: TelegramUpdate, sink?: string[], nowOverride?: string): Promise<void> {
     const message = update.message ?? update.edited_message;
     if (!message) {
       this.logger.log(`Ignoring update ${update.update_id}: no message`);
       return;
     }
+
+    // One instant for the whole update: the classifier resolves relative dates against it and a
+    // stored reminder's createdAt uses it, so a pinned test clock stays consistent across both.
+    const now = this.clock.now(nowOverride);
 
     const sender = describeSender(message.from);
     const { text, voice } = message;
@@ -210,23 +224,24 @@ export class TelegramService {
     // Commands are routed deterministically and never reach the model. Telegram sends /start
     // on first contact, so without this the very first message would be classified as prose.
     if (text?.startsWith('/')) {
-      await this.handleCommand(message.chat.id, text, sender, sink);
+      await this.handleCommand(message.chat.id, text, message.from, sender, sink);
       return;
     }
 
     if (voice) {
-      await this.handleVoice(message, voice, sender, sink);
+      await this.handleVoice(message, voice, sender, now, sink);
       return;
     }
 
     if (text) {
-      await this.route(message.chat.id, text, sender, undefined, sink);
+      await this.route(message.chat.id, text, message.from, sender, now, undefined, sink);
     }
   }
 
   private async handleCommand(
     chatId: number,
     text: string,
+    from: TelegramUser | undefined,
     sender: string,
     sink?: string[],
   ): Promise<void> {
@@ -243,13 +258,43 @@ export class TelegramService {
       return;
     }
 
+    if (command === '/export') {
+      await this.handleExport(chatId, from, sender, sink);
+      return;
+    }
+
     await this.sendMessage(chatId, `I do not know ${command}. Try /help.`, sink);
+  }
+
+  /**
+   * Dumps the requesting user's stored reminders as one JSON object `{"reminders":[...]}`. Read
+   * back by the verifier over HTTP; assertions are made on this structure, never on reply wording.
+   * The output embeds the user's own words, so it is never logged - only its item count is.
+   */
+  private async handleExport(
+    chatId: number,
+    from: TelegramUser | undefined,
+    sender: string,
+    sink?: string[],
+  ): Promise<void> {
+    let reminders: Awaited<ReturnType<RemindersService['list']>> = [];
+    if (from && this.reminders.available) {
+      try {
+        reminders = await this.reminders.list(from.id);
+      } catch (error) {
+        this.logger.error(`Failed to export reminders for ${sender}`, error as Error);
+      }
+    }
+
+    this.logger.log(`Exported ${reminders.length} reminder(s) for ${sender}`);
+    await this.sendMessage(chatId, JSON.stringify({ reminders }), sink);
   }
 
   private async handleVoice(
     message: TelegramMessage,
     voice: TelegramVoice,
     sender: string,
+    now: Date,
     sink?: string[],
   ): Promise<void> {
     const chatId = message.chat.id;
@@ -303,7 +348,7 @@ export class TelegramService {
     // Voice and text converge here: from this point nothing downstream knows which it was.
     // The transcript is echoed because it is the user's only evidence that speech recognition
     // heard them correctly.
-    await this.route(chatId, transcript, sender, `"${transcript}"`, sink);
+    await this.route(chatId, transcript, message.from, sender, now, `"${transcript}"`, sink);
   }
 
   /**
@@ -313,7 +358,9 @@ export class TelegramService {
   private async route(
     chatId: number,
     text: string,
+    from: TelegramUser | undefined,
     sender: string,
+    now: Date,
     prefix?: string,
     sink?: string[],
   ): Promise<void> {
@@ -323,6 +370,7 @@ export class TelegramService {
       return;
     }
 
+    const timezone = this.classifier.defaultTimezone;
     let result: ClassificationResult;
     try {
       if (!prefix) {
@@ -331,9 +379,11 @@ export class TelegramService {
       }
 
       result = await this.classifier.classify(text, {
-        timezone: this.classifier.defaultTimezone,
-        // Empty until Firestore lands. The shape is here now so phase 0 only fills it in:
-        // known vocabulary is what stops the model inventing a new slug for every wording,
+        timezone,
+        // The classifier needs the current local time to turn "Thursday" into a real date.
+        now: this.clock.formatLocal(now, timezone),
+        // Empty until the rest of Firestore lands. The shape is here now so later specs only fill
+        // it in: known vocabulary is what stops the model inventing a new slug for every wording,
         // and previousText is the only way a correction can be recognised.
         knownSymptomTypes: [],
         knownActors: [],
@@ -356,13 +406,28 @@ export class TelegramService {
     }
 
     let needsClarification = false;
+    // Whether the reply acted on anything that was NOT a successfully stored reminder. Drives the
+    // conditional NOT_STORED_NOTICE: a reply that only stored reminders must not carry it, and it
+    // must never falsely claim a store the bot did not make.
+    let hasUnstored = false;
     for (const item of result.items) {
       if (item.confidence < CONFIDENCE_ASK) {
         needsClarification = true;
+        hasUnstored = true;
         lines.push(this.describeUnsure(item));
         continue;
       }
 
+      if (item.intent === 'reminder') {
+        const outcome = await this.handleReminder(item, from, chatId, text, now, sender);
+        lines.push(outcome.text);
+        if (!outcome.stored) {
+          hasUnstored = true;
+        }
+        continue;
+      }
+
+      hasUnstored = true;
       lines.push(this.describeItem(item, result));
     }
 
@@ -370,8 +435,63 @@ export class TelegramService {
       lines.push('', 'Which is it - a note, a reminder, a symptom, or a question?');
     }
 
-    lines.push('', NOT_STORED_NOTICE);
+    if (hasUnstored) {
+      lines.push('', NOT_STORED_NOTICE);
+    }
     await this.sendMessage(chatId, lines.join('\n'), sink);
+  }
+
+  /**
+   * The reminder branch: persist a resolved reminder and confirm the stored time, or explain why
+   * it could not be stored. The item is already at or above CONFIDENCE_ASK here, which - given the
+   * classifier's validation - means it carries a resolvable future eventAt; create() re-validates
+   * and a rejection is still handled without claiming a store.
+   */
+  private async handleReminder(
+    item: Classification,
+    from: TelegramUser | undefined,
+    chatId: number,
+    originalText: string,
+    now: Date,
+    sender: string,
+  ): Promise<{ text: string; stored: boolean }> {
+    const reminder = item.reminder;
+    if (!reminder) {
+      // Should not happen above CONFIDENCE_ASK, but never invent a store if it does.
+      return { text: this.describeReminder(item), stored: false };
+    }
+
+    if (!from || !this.reminders.available) {
+      return {
+        text: `${this.describeReminder(item)}\nI could not store this reminder right now.`,
+        stored: false,
+      };
+    }
+
+    try {
+      const id = await this.reminders.create(
+        from.id,
+        chatId,
+        { title: reminder.title, eventAt: reminder.eventAt },
+        originalText,
+        now,
+      );
+      if (!id) {
+        return {
+          text: `${this.describeReminder(item)}\nI could not work out a clear time, so I did not store it.`,
+          stored: false,
+        };
+      }
+
+      const resolved = normalizeEventAt(reminder.eventAt, now) ?? reminder.eventAt ?? '';
+      return { text: `Reminder saved: ${reminder.title}\nwhen: ${resolved}`, stored: true };
+    } catch (error) {
+      this.logger.error(`Failed to store reminder for ${sender}`, error as Error);
+      return {
+        text: `${this.describeReminder(item)}\nI could not store this reminder right now.`,
+        stored: false,
+      };
+    }
   }
 
   /**

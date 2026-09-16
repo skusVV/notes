@@ -31,6 +31,7 @@ export class TelegramController {
   @HttpCode(200)
   async webhook(
     @Headers('x-telegram-bot-api-secret-token') secret: string | undefined,
+    @Headers('x-test-now') testNow: string | undefined,
     @Body() update: TelegramUpdate,
   ): Promise<{ ok: boolean; replies?: string[] }> {
     this.assertSecret(secret);
@@ -41,8 +42,12 @@ export class TelegramController {
     const reflect = this.config.get<string>('TEST_REFLECT_REPLY')?.trim() === 'true';
     const sink: string[] | undefined = reflect ? [] : undefined;
 
+    // X-Test-Now pins "now" for relative-date resolution, but only on the test function - the same
+    // trust boundary as reply reflection. Production has TEST_REFLECT_REPLY=false, so it is ignored.
+    const nowOverride = reflect ? testNow?.trim() || undefined : undefined;
+
     try {
-      await this.telegram.handleUpdate(update, sink);
+      await this.telegram.handleUpdate(update, sink, nowOverride);
     } catch (error) {
       // Always answer 200 so Telegram does not retry the same update forever.
       this.logger.error(`Failed to handle update ${update?.update_id}`, error as Error);

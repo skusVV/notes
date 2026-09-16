@@ -75,6 +75,11 @@ export interface ClassificationResult {
 export interface ClassifierContext {
   /** IANA timezone. Without it every relative date ("tomorrow at 9") is a guess. */
   timezone: string;
+  /**
+   * Current local time as ISO 8601 with offset, in the user's timezone. The model cannot resolve
+   * "Thursday" without knowing what day it is now, so this is required.
+   */
+  now: string;
   /** Existing symptom slugs, so "my head hurts" reuses `headache` instead of inventing. */
   knownSymptomTypes?: string[];
   /** Existing people and the forms used for them, so mentions resolve to one actor. */

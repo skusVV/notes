@@ -1,6 +1,8 @@
 import { GoogleGenAI, Schema, Type } from '@google/genai';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DateTime } from 'luxon';
+import { normalizeEventAt } from '../reminders/event-at';
 import {
   Classification,
   ClassificationResult,
@@ -225,11 +227,18 @@ export class ClassifierService {
       },
     });
 
-    return this.parse(response.text, text);
+    return this.parse(response.text, text, this.resolveNow(context.now));
+  }
+
+  /** The instant relative reminders are validated against, from the context's local-ISO "now". */
+  private resolveNow(now: string | undefined): Date {
+    const parsed = now ? DateTime.fromISO(now, { setZone: true }) : undefined;
+    return parsed?.isValid ? parsed.toJSDate() : new Date();
   }
 
   private buildInstruction(context: ClassifierContext): string {
     const timezone = context.timezone || this.defaultTimezone;
+    const now = context.now || this.describeNow(timezone);
     const parts = [
       'You classify messages sent to a personal memory assistant. The user speaks or types a',
       'short message; you decide what kind of thing it is so the bot can file it. You never',
@@ -238,9 +247,14 @@ export class ClassifierService {
       'Intents:',
       INTENT_GUIDE,
       '',
-      `Current local time: ${this.describeNow(timezone)} (timezone ${timezone}).`,
-      'Resolve every relative time ("tomorrow at 9", "in two hours") against that, and emit ISO',
-      '8601 with an offset. If the message states no time, omit the field rather than inventing one.',
+      `Current local time: ${now} (timezone ${timezone}).`,
+      'Resolve every relative date and time against that "now", and emit eventAt as ISO 8601 with',
+      "the user's local offset. Date-resolution rules:",
+      '- Emit eventAt ONLY when both a specific date and a specific time of day are determinable.',
+      '  If either is unclear, omit eventAt rather than guessing a date or a time.',
+      '- A bare weekday ("Thursday") means its next occurrence strictly after now.',
+      '- "next {weekday}" means the occurrence in the following week, not tomorrow.',
+      '- "the Nth" means the next occurrence of that day-of-month that is not before today.',
       '',
       'Rules that matter more than being helpful:',
       '- Omit any field the user did not actually state. An absent value is correct; a guessed',
@@ -295,7 +309,7 @@ export class ClassifierService {
    * invents an intent must not crash the webhook. Anything unusable becomes `other`, which the
    * router already knows how to handle.
    */
-  private parse(raw: string | undefined, original: string): ClassificationResult {
+  private parse(raw: string | undefined, original: string, now: Date): ClassificationResult {
     const body = raw?.trim();
     if (!body) {
       this.logger.warn('Classifier returned an empty body');
@@ -313,7 +327,7 @@ export class ClassifierService {
     const root = parsed as Record<string, unknown> | null;
     const rawItems = Array.isArray(root?.items) ? root.items : [];
     const items = rawItems
-      .map((item) => this.coerceItem(item))
+      .map((item) => this.coerceItem(item, now))
       .filter((item): item is Classification => item !== undefined);
 
     if (items.length === 0) {
@@ -329,7 +343,7 @@ export class ClassifierService {
     };
   }
 
-  private coerceItem(value: unknown): Classification | undefined {
+  private coerceItem(value: unknown, now: Date): Classification | undefined {
     const raw = value as Record<string, unknown> | null;
     if (!raw || typeof raw.intent !== 'string') {
       return undefined;
@@ -384,9 +398,12 @@ export class ClassifierService {
     }
 
     // An intent whose payload did not survive validation is not actionable. Rather than invent
-    // the missing part, drop the confidence so the router's clarify branch picks it up.
-    const needsPayload =
-      (intent === 'reminder' && !item.reminder) || (intent === 'symptom' && !item.symptom);
+    // the missing part, drop the confidence so the router's clarify branch picks it up. A reminder
+    // needs a resolvable future eventAt too: with no clear time it must be asked about, never
+    // stored with a guessed time (invent-nothing).
+    const reminderUnresolved =
+      intent === 'reminder' && (!item.reminder || !normalizeEventAt(item.reminder.eventAt, now));
+    const needsPayload = reminderUnresolved || (intent === 'symptom' && !item.symptom);
     if (needsPayload) {
       this.logger.warn(`Classifier returned ${intent} without a usable payload`);
       item.confidence = Math.min(item.confidence, CONFIDENCE_ASK - 0.01);

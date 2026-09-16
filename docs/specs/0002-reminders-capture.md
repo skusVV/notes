@@ -1,6 +1,6 @@
 ---
 id: 0002-reminders-capture
-state: IN-TESTING
+state: BLOCKED
 attempt: 0
 max_attempts: 3
 branch: feat/0002-reminders-capture
@@ -23,7 +23,24 @@ acceptance:
     assert: "A '/export' command update from a user id with no reminders (U5) returns a reflected reply that parses as JSON exactly equal to {\"reminders\":[]}"
   - id: non-reminder-not-stored
     assert: "POST 'Just thinking about the roof' from user id U6; a '/export' from U6 returns {\"reminders\":[]}"
-failures: []
+failures:
+  - attempt: 0
+    stage: in-testing
+    detail: >-
+      Storage is non-functional on the test deploy. Every reminder reply was "I could not store this
+      reminder right now." and every /export returned {"reminders":[]}, so reminder-stored,
+      relative-next-week, absolute-day-of-month and expireAt-present could not be observed, and
+      missing-time-not-stored is masked (empty for the wrong reason). The classifier resolved dates
+      correctly (haircut->2026-09-17T12:00:00+03:00, next Thursday->2026-09-24T18:00:00+03:00, the
+      25th->2026-09-25T12:00:00+03:00), so GCP_PROJECT is set and the model path works; the failure
+      is the Firestore backend. Most likely the spec's required Firestore Console/IAM setup for the
+      test function is not provisioned (create the `test` Native database in europe-west1, grant the
+      runtime compute service account roles/datastore.user, add the reminders TTL policy) - the agent
+      cannot create it (no gcloud, no Console). BLOCKED pending that setup; if it is already in place,
+      escalate to the implementer to investigate the Firestore error in Cloud Logging. Secondary
+      finding to re-check once storage works: the missing-time case ("call the doctor" with no time)
+      had the model fabricate 09:00 and the code took the store path, so the invent-nothing invariant
+      may be violated (likely a NEEDS-REWORK for the classifier/prompt). Security checklist: PASS.
 ---
 
 # 0002 - Reminders: capture, resolve, store

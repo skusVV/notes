@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
@@ -20,6 +22,16 @@ import {
 } from './telegram.types';
 
 const DEFAULT_MAX_VOICE_SECONDS = 300;
+
+// /version reports the running build's version. It is read from package.json at module load rather
+// than hardcoded, so a release bump there is the single source of truth and the number is never
+// invented. package.json sits two levels above this file both in source (src/telegram) and in the
+// compiled bundle (dist/telegram), so the same relative path resolves in dev, tests, and deploy.
+const PACKAGE_VERSION = (
+  JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
 
 // Gemini caps a request at 20 MB *including* the base64 payload, which inflates bytes by ~4/3,
 // so the raw audio ceiling is ~15 MB. Telegram's getFile download caps at 20 MB anyway. A
@@ -223,6 +235,11 @@ export class TelegramService {
 
     if (command === '/start' || command === '/help') {
       await this.sendMessage(chatId, HELP_TEXT, sink);
+      return;
+    }
+
+    if (command === '/version') {
+      await this.sendMessage(chatId, `notes-bot ${PACKAGE_VERSION}`, sink);
       return;
     }
 

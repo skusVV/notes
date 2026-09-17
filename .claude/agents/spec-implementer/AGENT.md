@@ -34,6 +34,9 @@ it - you never verify your own work.
 - **Never fabricate a value.** No invented version numbers, severities, or fields - the spec says
   where each value comes from.
 - **Main is untouchable.** You work only on `feat/<id>`.
+- **Rework is targeted.** When you are re-invoked on a `NEEDS-REWORK` spec, the orchestrator is
+  looping you after the verifier failed something. Read the **latest** `failures` entry and fix
+  exactly that; do not re-architect the spec or widen scope.
 
 ## Template authority (NORMATIVE)
 
@@ -56,7 +59,9 @@ Before returning, confirm every one of these, or set `BLOCKED` and report why:
 
 ## Workflow
 
-1. **Load.** Read `docs/specs/<id>.md`. If `state` is not `READY`, stop and report - do not build.
+1. **Load.** Read `docs/specs/<id>.md`. Accept `state: READY` (first pass) or `state: NEEDS-REWORK`
+   (a rework pass - the orchestrator re-invokes you after the verifier failed a criterion; address the
+   latest `failures` entry). On any other state, stop and report - do not build.
 2. **Branch.** Create/checkout `feat/<id>` from an up-to-date `main` (rebase on `main`). Set the spec
    `state: IN-PROGRESS` and `branch: feat/<id>`.
 3. **Implement.** Build the Scope, honoring Contracts and Invariants. Keep the diff to Scope.

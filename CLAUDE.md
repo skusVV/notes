@@ -24,8 +24,10 @@ npm run start:function  # build + serve the real Cloud Functions entry point via
 ```
 
 Deploys happen by pushing to the trigger's branch, or via **Run** on the trigger in the Cloud Build
-console. The user does **not** want `gcloud` CLI commands - all GCP setup and operations in
-[README.md](README.md) are Cloud Console click-paths, so keep any new instructions UI-based.
+console - never by running the deploy command locally. Local `gcloud` use is governed by
+[CLAUDE.local.md](CLAUDE.local.md) (read-only by default, pinned and guarded); documented GCP setup
+and operations in [README.md](README.md) stay Cloud Console click-paths, so keep any new
+instructions UI-based.
 
 There is **no test framework configured**. Verify changes by running the actual function entry
 point and curling it - this exercises `src/index.ts`, the Nest bootstrap, and the secret check,
@@ -158,8 +160,8 @@ update indefinitely. Failures are logged instead. Preserve this - returning 5xx 
 retry storms.
 
 **Deploy pipeline.** Push to the trigger's branch -> Cloud Build runs `cloudbuild.yaml` -> a single
-`gcloud functions deploy --gen2 --source=.` **inside the build container** (that is the one place
-`gcloud` appears; nobody runs it locally). The Google Node.js buildpack compiles TypeScript by
+`gcloud functions deploy --gen2 --source=.` **inside the build container** - the deploy command
+itself never runs locally. The Google Node.js buildpack compiles TypeScript by
 running the **`gcp-build`** script, so `dist/` is never committed and that script is load-bearing
 for deploys. The function URL is stable across redeploys, so `setWebhook` only needs re-running if
 the function name, region, or secret changes.

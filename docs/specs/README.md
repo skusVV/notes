@@ -1,9 +1,12 @@
 # Spec-driven delivery pipeline
 
-This folder is the control surface for how work gets built here. You and Claude write a **spec**; a
-**spec-implementer** agent builds it; a separate **spec-verifier** agent tests it against a live,
-isolated test Cloud Function and runs a security pass; you merge to `main`. The spec's frontmatter is
-the single source of truth for where each piece of work is.
+This folder is the control surface for how work gets built here. You and Claude write a **spec** and
+mark it `READY`; from there the **`/implement-spec` orchestrator** takes it to production unattended -
+a **spec-implementer** agent builds it, a separate **spec-verifier** agent tests it against a live,
+isolated test Cloud Function and runs a security pass, and on a pass the orchestrator refreshes the
+architecture map, merges to `main`, and pushes (which deploys). The two worker agents never touch
+`main`; the orchestrator, acting as your delegate, is the one thing that does. The spec's frontmatter
+is the single source of truth for where each piece of work is.
 
 ## TL;DR
 
@@ -12,6 +15,9 @@ the single source of truth for where each piece of work is.
 - **One spec = one file** here, named `NNNN-<slug>.md`, copied from [TEMPLATE.md](TEMPLATE.md).
 - **Lifecycle:** `DRAFT -> READY -> IN-PROGRESS -> IMPLEMENTED -> IN-TESTING -> VERIFIED -> DONE`,
   with a `NEEDS-REWORK` loop and a `BLOCKED` exit.
+- **`/implement-spec` ships it, hands-off:** once a spec is `READY`, that one command builds, verifies,
+  refreshes the architecture map, merges `feat/<id>` to `main`, and pushes to production - no human in
+  the loop. Marking `READY` is your last manual step.
 - **Two agents, on purpose:** the implementer builds, a *different* agent verifies. An agent grading
   its own work is biased to "it works"; fresh eyes are the check.
 - **Acceptance criteria are assertions, not prose** - see below. This is what makes autonomy
@@ -20,7 +26,7 @@ the single source of truth for where each piece of work is.
 ## The state machine
 
 ```
- DRAFT -> READY -> IN-PROGRESS -> IMPLEMENTED -> IN-TESTING -+-> VERIFIED ->(you merge)-> DONE
+ DRAFT -> READY -> IN-PROGRESS -> IMPLEMENTED -> IN-TESTING -+-> VERIFIED ->(orchestrator merges+pushes)-> DONE
    ^                   ^                             |         |
    |             (retry, attempt++)                 |         +-> NEEDS-REWORK -+
    |                   +-----------------------------------------------------+  |
@@ -37,7 +43,7 @@ the single source of truth for where each piece of work is.
 | `IN-TESTING` | spec-verifier | test lane free; `testing` reset to the feature branch and pushed; test function deployed |
 | `NEEDS-REWORK` | spec-verifier | a criterion or the security pass failed; reason appended to `failures`; `testing` reset to `main`; `attempt` incremented |
 | `VERIFIED` | spec-verifier | every criterion passed and the security pass is clean; `testing` reset to `main` |
-| `DONE` | **you** | you merged `feat/<id>` to `main` and the production deploy succeeded |
+| `DONE` | orchestrator (`/implement-spec`) | orchestrator merged `feat/<id>` to `main` and pushed once; the production deploy is building (it does not block on the deploy finishing) |
 | `BLOCKED` | either agent | `attempt > max_attempts`, or an ambiguity the agents cannot resolve |
 
 ## Spec frontmatter (the machine state)
@@ -95,15 +101,25 @@ git checkout testing && git reset --hard feat/<id> && git push --force origin te
 git checkout testing && git reset --hard main && git push --force origin testing
 ```
 
-`main` is **never** written by an agent. Merging a `VERIFIED` feature branch to `main` is your manual
-step, and it is the only path to production.
+The **worker agents** never write `main`. Merging a `VERIFIED` feature branch to `main` and pushing
+it - the only path to production - is done by the **`/implement-spec` orchestrator** (the top-level
+session, your delegate), not by either agent.
 
 ## Git permissions (NORMATIVE)
 
-The agents' one automated git action is: **commit to `feat/<id>` and force-push `testing`.** They do
-**not** commit, merge, or push to `main`, ever. This is a deliberately narrow, production-safe
-exception to the global "no automatic commits" rule, and it applies only inside this pipeline. If you
-have not granted it, both agents stop at the commit boundary and report instead of committing.
+Two grants, and only these, are the pipeline's automated git actions:
+
+- **The worker agents:** commit to `feat/<id>` and force-push `testing`. They do **not** commit,
+  merge, or push to `main`, ever.
+- **The `/implement-spec` orchestrator** (the top-level session, your delegate): once a spec is
+  `VERIFIED`, commit the refreshed `architecture.html` to `feat/<id>`, merge `feat/<id>` to `main`,
+  commit the `DONE` state on `main`, and `git push origin main` **once** (which triggers the
+  production deploy). It runs no `gcloud` - the push is the only deploy mechanism.
+
+Both are deliberately narrow, production-safe exceptions to the global "no automatic commits" rule,
+and they apply only inside this pipeline. The orchestrator's grant is armed by the explicit act of
+invoking `/implement-spec`: each run re-authorizes it, and nothing outside that run inherits it. If
+the grant is not in effect, the tooling stops at the commit boundary and reports instead.
 
 ## The test environment
 
@@ -120,7 +136,11 @@ have not granted it, both agents stop at the commit boundary and report instead 
 
 ## Roles: who moves each state
 
-- **You + Claude:** author the spec (`DRAFT`), lock the criteria and mark `READY`.
-- **spec-implementer:** `READY -> IN-PROGRESS -> IMPLEMENTED` (and back on rework).
-- **spec-verifier:** `IMPLEMENTED -> IN-TESTING -> VERIFIED | NEEDS-REWORK`.
-- **You:** merge to `main`, mark `DONE`.
+- **You + Claude:** author the spec (`DRAFT`), lock the criteria and mark `READY`. That `READY` mark
+  is the last manual step.
+- **`/implement-spec` orchestrator:** from `READY`, drives the whole chain - loops the implementer and
+  verifier (auto-rework up to `max_attempts`), and on `VERIFIED` refreshes `architecture.html`, merges
+  `feat/<id>` to `main`, pushes, and sets `DONE`.
+- **spec-implementer:** `READY -> IN-PROGRESS -> IMPLEMENTED` (and `NEEDS-REWORK -> IN-PROGRESS ->
+  IMPLEMENTED` on a rework loop).
+- **spec-verifier:** `IMPLEMENTED -> IN-TESTING -> VERIFIED | NEEDS-REWORK` (`BLOCKED` past the cap).

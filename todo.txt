@@ -1,0 +1,6 @@
+2. testing of the prompts, it should be part of the workflow
+3. MOre pre-hooks, we should be safe what system does.
+4. Validation of the input - prompt injection and other threads.
+5. Limit tool usage for only what is needed.
+6. Think about destructive tools, maybe we don't need them at all.? For example expired reminders we can just remove by TTL.
+7.Morning report

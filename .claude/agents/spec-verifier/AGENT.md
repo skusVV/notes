@@ -57,6 +57,8 @@ Before returning, confirm all of these:
 
 1. **Load and gate.** Read `docs/specs/<id>.md`. Require `state: IMPLEMENTED`. Check `.testing-lock`:
    if held by another spec, stop and report (wait for the lane); if free, write it with this spec id.
+   Source `.env` (`set -a; source .env; set +a`) to get `TEST_URL` and `TEST_WEBHOOK_SECRET` - they
+   are git-ignored config, not shell exports, so read them from there rather than asking the user.
 2. **Enter the lane.** `git checkout testing && git reset --hard feat/<id> && git push --force origin
    testing`. Set `state: IN-TESTING`. Pushing triggers the `testing` Cloud Build trigger - you never
    run `gcloud`.
@@ -65,9 +67,9 @@ Before returning, confirm all of these:
    command stops returning the "I do not know" fallback), up to a sensible timeout. That transition is
    your proof the new revision is serving. If it never flips, set `BLOCKED` (deploy not observable)
    and clean up.
-4. **Assert each criterion.** For each `acceptance` entry, send the HTTP request (POST crafted
-   `TelegramUpdate`s with the `X-Telegram-Bot-Api-Secret-Token` header from `TEST_WEBHOOK_SECRET`) and
-   check the reflected reply or status. Record pass/fail with evidence.
+4. **Assert each criterion.** For each `acceptance` entry, send the HTTP request to `$TEST_URL` (POST
+   crafted `TelegramUpdate`s with the `X-Telegram-Bot-Api-Secret-Token` header set to
+   `$TEST_WEBHOOK_SECRET`) and check the reflected reply or status. Record pass/fail with evidence.
 5. **Security pass.** Run [references/security-checklist.md](references/security-checklist.md) over
    `git diff main...feat/<id>`. Record the verdict.
 6. **Verdict and cleanup (always cleans up).**

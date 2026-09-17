@@ -1,6 +1,6 @@
 ---
 id: 0004-multiple-notify-times
-state: IN-TESTING
+state: BLOCKED
 attempt: 0
 max_attempts: 3
 branch: feat/0004-multiple-notify-times
@@ -17,7 +17,11 @@ acceptance:
     assert: "Read the sent notification id from U1's '/export'. POST a callback_query (valid webhook secret, from = U1) with data 'rem:ok:{notificationId}'; a '/export' from U1 shows that notification 'acked' and the other notification still 'scheduled'"
   - id: snooze-moves-only-that-notification
     assert: "For a delivered notification owned by user id U3, POST a callback_query from U3 with data 'rem:1h:{notificationId}' and X-Test-Now=2026-09-21T19:05:00+03:00; a '/export' from U3 shows that notification back to 'scheduled' with at == '2026-09-21T20:05:00+03:00', and the reminder's other notifications unchanged"
-failures: []
+failures:
+  - attempt: 0
+    stage: verification
+    detail: >-
+      Verification could not complete: the sweep delivers nothing on the test function. Capture works (criteria health, two-notifications-captured, single-default-notification all PASS against the live test deploy of 2a09399), but POST /sweep returns 200 with zero reflected deliveries at every pinned now, and notifications that are status 'scheduled' with at <= cutoff stay 'scheduled'. backfillLegacy succeeds in the same tick (legacy reminders gained notifications and lost remindAt), which isolates the failure to RemindersService.findDue - the notifications collection-group query on (status ==, at <=). The composite index that query needs - collection group 'notifications', scope Collection group, fields status Asc then at Asc - is new in this spec and does not exist on the 'test' Firestore database; README step 5 predicts exactly this FAILED_PRECONDITION symptom. Creating it is a manual Cloud Console action neither worker agent is permitted to perform, so this is an environment blocker, not a code defect: criteria independent-delivery, ok-acks-only-that-notification and snooze-moves-only-that-notification were NOT observable and are therefore NOT passed. Security pass over git diff main...feat/0004-multiple-notify-times: PASS. Re-run verification once the index is Enabled on 'test'. attempt left at 0 - no implementation rework attempt was consumed.
 ---
 
 # 0004 - Multiple notify times per reminder

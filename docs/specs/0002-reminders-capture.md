@@ -1,6 +1,6 @@
 ---
 id: 0002-reminders-capture
-state: BLOCKED
+state: IMPLEMENTED
 attempt: 0
 max_attempts: 3
 branch: feat/0002-reminders-capture

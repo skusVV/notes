@@ -42,4 +42,27 @@ export class ClockService {
     });
     return dt.toISO({ suppressMilliseconds: true, includeOffset: true }) ?? instant.toISOString();
   }
+
+  /**
+   * `instant` shifted forward by whole hours - the `+1h` snooze target. A fixed duration, so it is
+   * zone-independent: an hour is an hour even across a DST boundary.
+   */
+  plusHours(instant: Date, hours: number): Date {
+    return DateTime.fromJSDate(instant).plus({ hours }).toJSDate();
+  }
+
+  /**
+   * The next calendar day after `instant`, at `hour`:00 local time in `timezone` - the `Tomorrow`
+   * snooze target. "Next calendar day" is decided in that zone, not in UTC, and the resulting
+   * instant carries whatever offset the zone is on that day, so a jump across a DST change still
+   * lands on 09:00 wall-clock. An unknown zone degrades to UTC rather than throwing.
+   */
+  nextDayAt(instant: Date, timezone: string, hour: number): Date {
+    const local = DateTime.fromJSDate(instant).setZone(timezone);
+    const base = local.isValid ? local : DateTime.fromJSDate(instant).setZone('UTC');
+    return base
+      .plus({ days: 1 })
+      .set({ hour, minute: 0, second: 0, millisecond: 0 })
+      .toJSDate();
+  }
 }

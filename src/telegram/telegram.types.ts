@@ -26,10 +26,34 @@ export interface TelegramMessage {
   voice?: TelegramVoice;
 }
 
+/** One tappable button. `callback_data` is capped by Telegram at 64 bytes. */
+export interface InlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+/** The `reply_markup` payload that turns a message into a message with buttons. */
+export interface InlineKeyboardMarkup {
+  inline_keyboard: InlineKeyboardButton[][];
+}
+
+/**
+ * A button tap. It arrives as a normal update on the webhook, so it is already behind the
+ * webhook-secret check. `message` is the message the keyboard was attached to, which is how the
+ * keyboard can be removed after the tap.
+ */
+export interface TelegramCallbackQuery {
+  id: string;
+  from: TelegramUser;
+  message?: TelegramMessage;
+  data?: string;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 /** The getFile result. `file_path` is relative to https://api.telegram.org/file/bot<TOKEN>/. */

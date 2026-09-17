@@ -3,12 +3,13 @@ import { ClassifierModule } from '../classifier/classifier.module';
 import { ClockModule } from '../clock/clock.module';
 import { RemindersModule } from '../reminders/reminders.module';
 import { TranscriptionModule } from '../transcription/transcription.module';
+import { SweeperService } from './sweeper.service';
 import { TelegramController } from './telegram.controller';
 import { TelegramService } from './telegram.service';
 
 @Module({
   imports: [TranscriptionModule, ClassifierModule, RemindersModule, ClockModule],
   controllers: [TelegramController],
-  providers: [TelegramService],
+  providers: [TelegramService, SweeperService],
 })
 export class TelegramModule {}

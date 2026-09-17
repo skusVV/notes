@@ -13,10 +13,12 @@ import {
 } from '../classifier/classifier.types';
 import { ClockService } from '../clock/clock.service';
 import { normalizeEventAt } from '../reminders/event-at';
-import { RemindersService } from '../reminders/reminders.service';
+import { DueReminder, RemindersService } from '../reminders/reminders.service';
 import { TranscriptionService } from '../transcription/transcription.service';
 import {
+  InlineKeyboardMarkup,
   TelegramApiResponse,
+  TelegramCallbackQuery,
   TelegramFile,
   TelegramMessage,
   TelegramUpdate,
@@ -54,10 +56,63 @@ const HELP_TEXT = [
   '',
   'I work out which one it is and show you what I understood.',
   'Reminders with a clear date and time are saved; other kinds are not kept yet.',
+  'When a reminder is due I send it with OK / +1h / Tomorrow buttons.',
   '',
   '/export - show your stored reminders as JSON',
   '/help - this message',
 ].join('\n');
+
+/** The hour of the local day the `Tomorrow` button snoozes to. */
+export const SNOOZE_TOMORROW_HOUR = 9;
+
+/** What the three delivery buttons do. The value is the middle field of the `callback_data`. */
+export type ReminderAction = 'ok' | '1h' | 'tmrw';
+
+const REMINDER_ACTIONS: readonly ReminderAction[] = ['ok', '1h', 'tmrw'];
+
+/** `callback_data` is namespaced so a later feature's buttons cannot be mistaken for these. */
+const CALLBACK_PREFIX = 'rem';
+
+export interface ReminderCallback {
+  action: ReminderAction;
+  id: string;
+}
+
+/**
+ * Parses a delivery button's `callback_data`, which is always exactly `rem:<action>:<reminderId>`.
+ * Anything else - another feature's button, a truncated value, an unknown action - returns
+ * `undefined` so the caller refuses instead of guessing. Firestore auto-ids contain no colon, so
+ * a strict three-field split is safe.
+ */
+export function parseCallbackData(data: string | undefined): ReminderCallback | undefined {
+  const parts = data?.trim().split(':') ?? [];
+  if (parts.length !== 3 || parts[0] !== CALLBACK_PREFIX) {
+    return undefined;
+  }
+
+  const [, action, id] = parts;
+  if (!id || !REMINDER_ACTIONS.includes(action as ReminderAction)) {
+    return undefined;
+  }
+
+  return { action: action as ReminderAction, id };
+}
+
+/**
+ * The three buttons on a delivered reminder. `callback_data` stays well under Telegram's 64-byte
+ * limit: the prefix and action are 8 characters at most and a Firestore auto-id is 20.
+ */
+export function reminderKeyboard(id: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: 'OK', callback_data: `${CALLBACK_PREFIX}:ok:${id}` },
+        { text: '+1h', callback_data: `${CALLBACK_PREFIX}:1h:${id}` },
+        { text: 'Tomorrow', callback_data: `${CALLBACK_PREFIX}:tmrw:${id}` },
+      ],
+    ],
+  };
+}
 
 function describeSender(from: TelegramUser | undefined): string {
   if (!from) {
@@ -190,6 +245,13 @@ export class TelegramService {
   // `nowOverride` is the X-Test-Now value, forwarded only by the test function (same trust boundary
   // as `sink`); it pins "now" for this one update so relative-date resolution is deterministic.
   async handleUpdate(update: TelegramUpdate, sink?: string[], nowOverride?: string): Promise<void> {
+    // A delivery button tap arrives as its own update kind, so it is handled before the
+    // message branches. It rides the same webhook, so it is already behind the secret check.
+    if (update.callback_query) {
+      await this.handleCallbackQuery(update.callback_query, this.clock.now(nowOverride), sink);
+      return;
+    }
+
     const message = update.message ?? update.edited_message;
     if (!message) {
       this.logger.log(`Ignoring update ${update.update_id}: no message`);
@@ -235,6 +297,133 @@ export class TelegramService {
 
     if (text) {
       await this.route(message.chat.id, text, message.from, sender, now, undefined, sink);
+    }
+  }
+
+  /**
+   * Sends one due reminder with its OK / +1h / Tomorrow keyboard. Called by the sweeper, only ever
+   * for a reminder it has already claimed, so this method never decides whether to deliver.
+   */
+  async sendReminder(reminder: DueReminder, sink?: string[]): Promise<void> {
+    const lines = [`Reminder: ${reminder.title}`];
+    if (reminder.eventAt) {
+      lines.push(`when: ${reminder.eventAt}`);
+    }
+
+    await this.sendMessage(reminder.chatId, lines.join('\n'), sink, reminderKeyboard(reminder.id));
+  }
+
+  /**
+   * A delivery button tap: gate, owner check, then act. The gate runs before anything reads or
+   * writes Firestore, and the owner check means a reminder is only ever moved by the person who
+   * created it. Telegram shows a spinner on the tapped button until `answerCallbackQuery` replies,
+   * so every path through here answers - including the refusals.
+   */
+  private async handleCallbackQuery(
+    query: TelegramCallbackQuery,
+    now: Date,
+    sink?: string[],
+  ): Promise<void> {
+    const sender = describeSender(query.from);
+    const tap = parseCallbackData(query.data);
+
+    // The reminder id, the action, and the sender - never the reminder's contents.
+    this.logger.log(
+      `Received callback ${tap?.action ?? 'unparseable'} from ${sender} for reminder ${tap?.id ?? 'none'}`,
+    );
+
+    // The gate precedes every read and write, exactly as it does for messages.
+    if (!this.isAllowed(query.from)) {
+      this.logger.warn(`Denied ${sender}: not in ALLOWED_USERS`);
+      await this.answerCallback(query.id, 'Sorry, you are not allowed to use this bot.', sink);
+      return;
+    }
+
+    if (!tap) {
+      await this.answerCallback(query.id, 'I do not recognise that button.', sink);
+      return;
+    }
+
+    if (!this.reminders.available) {
+      await this.answerCallback(query.id, 'I cannot reach my store right now.', sink);
+      return;
+    }
+
+    try {
+      // Owner check. A reminder belonging to somebody else - or one that no longer exists - is
+      // refused with no state change at all.
+      const owned = await this.reminders.getOwned(query.from.id, tap.id);
+      if (!owned) {
+        this.logger.warn(`Refused callback from ${sender}: reminder ${tap.id} is not theirs`);
+        await this.answerCallback(query.id, 'That reminder is not yours.', sink);
+        return;
+      }
+
+      await this.applyCallback(tap, query, now, sink);
+    } catch (error) {
+      this.logger.error(`Failed to apply callback for reminder ${tap.id}`, error as Error);
+      await this.answerCallback(query.id, 'Sorry, that did not go through.', sink);
+    }
+  }
+
+  /** The three button branches. A snooze moves `remindAt` only; `eventAt` is never touched. */
+  private async applyCallback(
+    tap: ReminderCallback,
+    query: TelegramCallbackQuery,
+    now: Date,
+    sink?: string[],
+  ): Promise<void> {
+    const userId = query.from.id;
+    const timezone = this.classifier.defaultTimezone;
+
+    if (tap.action === 'ok') {
+      await this.reminders.ack(userId, tap.id, now);
+      await this.answerCallback(query.id, 'Done.', sink);
+      // Best effort: the reminder is already acked, so a failure here is cosmetic.
+      await this.removeKeyboard(query.message);
+      return;
+    }
+
+    const remindAt =
+      tap.action === '1h'
+        ? this.clock.plusHours(now, 1)
+        : this.clock.nextDayAt(now, timezone, SNOOZE_TOMORROW_HOUR);
+
+    await this.reminders.snooze(userId, tap.id, remindAt);
+    await this.answerCallback(
+      query.id,
+      `I will remind you again at ${this.clock.formatLocal(remindAt, timezone)}.`,
+      sink,
+    );
+  }
+
+  /** Stops Telegram's spinner on the tapped button. Reflected too, so a test can read the outcome. */
+  private async answerCallback(callbackId: string, text: string, sink?: string[]): Promise<void> {
+    if (sink) {
+      sink.push(text);
+    }
+
+    try {
+      await this.api.post('/answerCallbackQuery', { callback_query_id: callbackId, text });
+    } catch (error) {
+      this.logger.warn(`answerCallbackQuery failed: ${(error as Error).message}`);
+    }
+  }
+
+  /** Clears the buttons off an acknowledged delivery so it cannot be tapped twice. */
+  private async removeKeyboard(message: TelegramMessage | undefined): Promise<void> {
+    if (!message) {
+      return;
+    }
+
+    try {
+      await this.api.post('/editMessageReplyMarkup', {
+        chat_id: message.chat.id,
+        message_id: message.message_id,
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch (error) {
+      this.logger.warn(`editMessageReplyMarkup failed: ${(error as Error).message}`);
     }
   }
 
@@ -620,9 +809,15 @@ export class TelegramService {
     }
   }
 
-  private async sendMessage(chatId: number, text: string, sink?: string[]): Promise<void> {
+  private async sendMessage(
+    chatId: number,
+    text: string,
+    sink?: string[],
+    replyMarkup?: InlineKeyboardMarkup,
+  ): Promise<void> {
     // Deliberately no parse_mode: replies embed the user's own words, and Markdown or HTML
-    // would break on any stray underscore or angle bracket in a transcript.
+    // would break on any stray underscore or angle bracket in a transcript. Buttons ride on
+    // reply_markup instead, which is orthogonal to text formatting.
     const chunks = splitForTelegram(text);
 
     // Reflect mode (test function only): record every chunk so the verifier can read replies from
@@ -632,9 +827,15 @@ export class TelegramService {
       sink.push(...chunks);
     }
 
-    for (const chunk of chunks) {
+    for (const [index, chunk] of chunks.entries()) {
       try {
-        await this.api.post('/sendMessage', { chat_id: chatId, text: chunk });
+        // The keyboard goes on the last chunk so the buttons sit under the whole message.
+        const markup = replyMarkup && index === chunks.length - 1 ? replyMarkup : undefined;
+        await this.api.post('/sendMessage', {
+          chat_id: chatId,
+          text: chunk,
+          ...(markup ? { reply_markup: markup } : {}),
+        });
       } catch (error) {
         if (!sink) {
           throw error;

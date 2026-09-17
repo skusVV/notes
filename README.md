@@ -33,6 +33,8 @@ All sensitive values come from the environment, never from source:
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. Required. |
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
 | `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a refusal message naming their own id. Empty or unset allows everyone. |
+| `REMINDER_SWEEP_SECRET` | Shared secret Cloud Scheduler sends in the `X-Sweep-Secret` header when it calls `POST /sweep`, the endpoint that delivers due reminders. **Unset disables `/sweep`** (it answers `401` and delivers nothing) - unlike the webhook secret, "not configured" fails closed. |
+| `REMINDER_SWEEP_INTERVAL_MINUTES` | Optional, default `30`. The sweep's look-ahead: each tick delivers everything due before the next tick, so reminders fire up to this many minutes early rather than late. Keep it **equal to the Cloud Scheduler frequency**. |
 | `GCP_PROJECT` | GCP project used for Vertex AI transcription/classification and Firestore. No API key involved. If unset, voice messages are refused politely, classification degrades to plain echo, and reminders are not stored - text echo keeps working. Set automatically on deploy. |
 | `FIRESTORE_DATABASE` | Firestore database id reminders are stored in. Code default `(default)`; deployed as `(default)` in production and `test` on the test function via `cloudbuild.yaml`, so the test lane never touches production data. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Local dev only, and only to transcribe locally. Path to a service-account JSON key. |
@@ -111,6 +113,7 @@ comes up empty - Google renames the labels, not the ids.
 | `TELEGRAM_BOT_TOKEN` | the token @BotFather gave you |
 | `TELEGRAM_WEBHOOK_SECRET` | a random string of `A-Z a-z 0-9 _ -` only, e.g. from `openssl rand -hex 24` (keep a copy, you need it for `setWebhook`) |
 | `ALLOWED_USERS` | comma-separated Telegram user ids, e.g. `111111111,222222222` |
+| `REMINDER_SWEEP_SECRET` | another random string of `A-Z a-z 0-9 _ -`, e.g. from `openssl rand -hex 24` (keep a copy, the Cloud Scheduler job in step 8 sends it as a header) |
 
 Stick to that character set for the webhook secret. Telegram rejects anything else in
 `secret_token`, and a value containing `&`, `#`, or `+` silently truncates when you paste it into
@@ -129,9 +132,13 @@ names, change them in both places.
 Transcription needs no secret at all. The deployed function calls Vertex AI as its own service
 account, so there is no API key to store or rotate - just the IAM grant in step 3b.
 
+The test lane needs its own copy of the sweep secret, `REMINDER_SWEEP_SECRET_TEST`, alongside
+`TELEGRAM_BOT_TOKEN_TEST` and `TELEGRAM_WEBHOOK_SECRET_TEST`, so verification can trigger a sweep on
+the test function without knowing the production value.
+
 ### 3. Let the function read the secrets
 
-For each of the three secrets: open it in Secret Manager, go to the **Permissions** tab ->
+For each of the secrets: open it in Secret Manager, go to the **Permissions** tab ->
 **Grant access**.
 
 - New principal: `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`
@@ -183,6 +190,16 @@ Reminders are stored in Firestore, so create two databases and grant access.
    database (`(default)` and `test`): **Firestore -> TTL -> Create policy**, collection group
    **`reminders`**, timestamp field **`expireAt`**. Each stored reminder sets `expireAt` to its
    event time plus 24 hours.
+5. Add the **composite index** the delivery sweep queries through. On **each** database: **Firestore
+   -> Indexes -> Composite -> Create index**.
+   - Collection **group** id: `reminders`
+   - Query scope: **Collection group** (not Collection - the sweep reads every user's reminders in
+     one query)
+   - Fields: `status` **Ascending**, then `remindAt` **Ascending**
+   - Click **Create** and wait for the status to go from *Building* to *Enabled*.
+
+   If you skip this, the sweep fails with a `FAILED_PRECONDITION` whose message contains a Console
+   link that creates exactly this index - following that link is an equally valid way to do it.
 
 ### 4. Let Cloud Build deploy the function
 
@@ -287,6 +304,39 @@ registration any time with `https://api.telegram.org/bot<BOT_TOKEN>/getWebhookIn
 The function URL is stable across redeploys, so this only has to be done again if you change the
 secret, the function name, or the region.
 
+### 8. Schedule the reminder sweep
+
+Nothing delivers a reminder until something calls `POST /sweep` on a schedule. **Cloud Scheduler ->
+Create job**:
+
+| Field | Value |
+| --- | --- |
+| Name | `reminder-sweep` |
+| Region | `europe-west1` (the same region as the function) |
+| Frequency | `*/30 * * * *` |
+| Timezone | `Europe/Kyiv` |
+| Target type | **HTTP** |
+| URL | the function URL from step 7 with `/sweep` appended, e.g. `https://telegram-echo-bot-....run.app/sweep` |
+| HTTP method | **POST** |
+| Auth header | **None** (the shared secret below is the authentication) |
+
+Then **Show more -> Add header**:
+
+- Name: `X-Sweep-Secret`
+- Value: the `REMINDER_SWEEP_SECRET` value from step 2
+
+Click **Create**, then **Force run** once and check **Cloud Logging** for a `Sweep found 0 due
+reminder(s)` line. A `401` means the header value does not match the secret the function booted
+with; a new secret version only reaches the function on a new revision.
+
+The frequency and `REMINDER_SWEEP_INTERVAL_MINUTES` must stay **equal**. The sweep looks ahead one
+interval and delivers everything due before the next tick, so a cron slower than the interval leaves
+reminders late, and a faster one re-runs the same window (harmless, just wasted calls). Change one,
+change the other.
+
+Enabling the Cloud Scheduler API (`cloudscheduler.googleapis.com`) is offered inline the first time
+you open the page.
+
 ## Behaviour notes
 
 - The webhook always answers `200` even when the outbound `sendMessage` fails, so Telegram does
@@ -308,7 +358,18 @@ secret, the function name, or the region.
   so "haircut on Thursday at 12" is resolved to a concrete instant and written to
   `users/{userId}/reminders/{autoId}`. A reminder that names no clear time is **not** stored - the
   bot asks rather than guessing. `/export` replies with the requesting user's stored reminders as a
-  single JSON object `{"reminders":[...]}`. Delivery (a due-reminder message) is a later step.
+  single JSON object `{"reminders":[...]}`.
+- **Reminders are delivered by a sweep, early rather than late.** A Cloud Scheduler job POSTs to
+  `/sweep` every 30 minutes; each tick sends every reminder due before the *next* tick, so a
+  reminder for 10:00 arrives at the 09:45-ish tick, up to 30 minutes early and never late. There are
+  no quiet hours. A reminder is flipped `scheduled -> sent` inside a Firestore transaction *before*
+  it is sent, so two overlapping ticks can never notify twice; a send that fails is logged and not
+  retried.
+- **Each delivered reminder carries OK / +1h / Tomorrow buttons.** `OK` marks it `acked`, `+1h`
+  reschedules it to an hour after the tap, `Tomorrow` to 09:00 local the next day. A snooze moves
+  only `remindAt` - `eventAt`, when the thing itself happens, is never rewritten. Taps arrive on the
+  same webhook, so they pass the same secret check and the same `ALLOWED_USERS` gate, and a reminder
+  can only be moved by the user who created it.
 - **`X-Test-Now` is test-only.** On the test function (`TEST_REFLECT_REPLY=true`) an
   `X-Test-Now: 2026-09-16T09:00:00+03:00` header pins "now" for that one request, so relative-date
   resolution is deterministic in verification. Production has reflection off and ignores the header

@@ -25,7 +25,9 @@ steps:
       # ENV_VAR=SECRET_NAME:version. Secret Manager names are case-sensitive and must match the
       # secrets in this project exactly. ALLOWED_USERS goes through Secret Manager too, so its
       # comma-separated value cannot collide with the comma that separates entries in this flag.
-      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=ALLOWED_USERS:latest
+      # REMINDER_SWEEP_SECRET authenticates the Cloud Scheduler tick that hits POST /sweep. Unset,
+      # that endpoint is disabled, so no reminder is ever delivered.
+      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=ALLOWED_USERS:latest,REMINDER_SWEEP_SECRET=${_SWEEP_SECRET_NAME}:latest
       # Not secret, so plain env vars. Transcription needs no API key: the function calls Vertex AI
       # as its own runtime service account. It only needs to know which project and endpoint to
       # talk to. Declared here rather than left to code defaults so the model id is visible and
@@ -38,7 +40,10 @@ steps:
       # safe defaults (reflection off, default database), the `testing` trigger overrides them.
       # FIRESTORE_DATABASE is declared now so the `test` store is wired before phase 0 reads it; no
       # code reads it yet.
-      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,CLASSIFIER_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300,DEFAULT_TIMEZONE=Europe/Kyiv,TEST_REFLECT_REPLY=${_REPLY_REFLECT},FIRESTORE_DATABASE=${_FIRESTORE_DB}
+      # REMINDER_SWEEP_INTERVAL_MINUTES is the sweep's look-ahead: each tick delivers everything due
+      # before the next one. It must stay equal to the Cloud Scheduler job's frequency (*/30), or
+      # reminders arrive late (cron slower) or the same window is swept twice (cron faster).
+      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,CLASSIFIER_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300,DEFAULT_TIMEZONE=Europe/Kyiv,REMINDER_SWEEP_INTERVAL_MINUTES=30,TEST_REFLECT_REPLY=${_REPLY_REFLECT},FIRESTORE_DATABASE=${_FIRESTORE_DB}
 
 substitutions:
   _FUNCTION_NAME: telegram-echo-bot
@@ -47,8 +52,10 @@ substitutions:
   # isolated second function from this same file - see docs/specs/README.md:
   #   _FUNCTION_NAME=telegram-echo-bot-test  _TOKEN_SECRET=TELEGRAM_BOT_TOKEN_TEST
   #   _WEBHOOK_SECRET_NAME=TELEGRAM_WEBHOOK_SECRET_TEST  _REPLY_REFLECT=true  _FIRESTORE_DB=test
+  #   _SWEEP_SECRET_NAME=REMINDER_SWEEP_SECRET_TEST
   _TOKEN_SECRET: TELEGRAM_BOT_TOKEN
   _WEBHOOK_SECRET_NAME: TELEGRAM_WEBHOOK_SECRET
+  _SWEEP_SECRET_NAME: REMINDER_SWEEP_SECRET
   _REPLY_REFLECT: 'false'
   _FIRESTORE_DB: '(default)'
 

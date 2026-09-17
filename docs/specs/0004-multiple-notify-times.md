@@ -1,6 +1,6 @@
 ---
 id: 0004-multiple-notify-times
-state: IMPLEMENTED
+state: IN-TESTING
 attempt: 0
 max_attempts: 3
 branch: feat/0004-multiple-notify-times

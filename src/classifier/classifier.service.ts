@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DateTime } from 'luxon';
 import { normalizeEventAt } from '../reminders/event-at';
+import { EVENING_HOUR, MORNING_HOUR, RELATIVE_NOTIFY } from '../reminders/notify-times';
 import {
   Classification,
   ClassificationResult,
@@ -82,6 +83,19 @@ const RESPONSE_SCHEMA: Schema = {
                   'true just because eventAt has a time; the current local time is not a time ' +
                   'the user gave.',
               },
+              notifyAt: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description:
+                  'One entry per nudge the message asks for - "remind me the evening before AND ' +
+                  'the morning of" is TWO entries. Each entry is either an ISO 8601 instant with ' +
+                  'offset, or one of these keywords, which the bot resolves itself: ' +
+                  `${RELATIVE_NOTIFY.join(', ')} ("_of" = the day of the event, "_before" = the ` +
+                  'day before it). Prefer a keyword when the phrase is one of those; use an ISO ' +
+                  'instant only when the user gave an explicit notify date and clock time. OMIT ' +
+                  'this entirely when the message asks for no separate notify time - the bot then ' +
+                  'nudges once, at the event itself.',
+              },
               leadMinutes: {
                 type: Type.INTEGER,
                 description:
@@ -94,7 +108,14 @@ const RESPONSE_SCHEMA: Schema = {
               },
             },
             required: ['title', 'hasTimeOfDay'],
-            propertyOrdering: ['title', 'eventAt', 'hasTimeOfDay', 'leadMinutes', 'recurrence'],
+            propertyOrdering: [
+              'title',
+              'eventAt',
+              'hasTimeOfDay',
+              'notifyAt',
+              'leadMinutes',
+              'recurrence',
+            ],
           },
           symptom: {
             type: Type.OBJECT,
@@ -276,6 +297,18 @@ export class ClassifierService {
       '- "remind me on Thursday to call the doctor" -> NO time of day given, so omit eventAt and set',
       '  hasTimeOfDay=false. Do NOT reuse the current time.',
       '',
+      'Notify times (notifyAt). eventAt is when the thing HAPPENS; notifyAt is when to NUDGE, and a',
+      'message can ask for several nudges about one event. Rules:',
+      `- Use the keywords where they fit: ${RELATIVE_NOTIFY.join(', ')}. The bot resolves "morning"`,
+      `  to ${String(MORNING_HOUR).padStart(2, '0')}:00 and "evening" to ${EVENING_HOUR}:00 local,`,
+      '  so do NOT invent an hour for them.',
+      '- One entry per nudge asked for, in the order they were said.',
+      '- Omit notifyAt when the message asks for no separate notify time. Do not add a default.',
+      'Examples:',
+      '- "doctor on the 22nd at 2PM, remind me the evening before and the morning of" ->',
+      '  eventAt = the 22nd 14:00 local, notifyAt = ["evening_before", "morning_of"].',
+      '- "remind me on the 25th at 12 to pay rent" -> eventAt = the 25th 12:00 local, notifyAt omitted.',
+      '',
       'Rules that matter more than being helpful:',
       '- Omit any field the user did not actually state. An absent value is correct; a guessed',
       '  value is a silent error the user will not notice for weeks.',
@@ -385,9 +418,13 @@ export class ClassifierService {
 
     const reminder = raw.reminder as Record<string, unknown> | undefined;
     if (intent === 'reminder' && typeof reminder?.title === 'string' && reminder.title.trim()) {
+      const notifyAt = stringArray(reminder.notifyAt);
       item.reminder = {
         title: reminder.title.trim(),
         eventAt: optionalString(reminder.eventAt),
+        // Absent stays absent: an empty array would read as "asked for no nudge" rather than
+        // "named no notify time", and the store resolves the latter to one nudge at eventAt.
+        notifyAt: notifyAt.length > 0 ? notifyAt : undefined,
         leadMinutes: optionalInt(reminder.leadMinutes),
         recurrence: optionalString(reminder.recurrence),
       };

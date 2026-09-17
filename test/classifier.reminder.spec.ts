@@ -103,6 +103,40 @@ describe('ClassifierService reminder validation', () => {
     expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
   });
 
+  // acceptance: two-notifications-captured - both notify phrases survive to the reminder draft
+  it('carries every requested notify time through to the draft', async () => {
+    replyWithReminder(0.95, {
+      title: 'doctor appointment',
+      eventAt: '2026-09-22T14:00:00+03:00',
+      hasTimeOfDay: true,
+      notifyAt: ['evening_before', 'morning_of'],
+    });
+
+    const result = await classifier.classify(
+      'I have a doctor appointment on the 22nd at 2PM, remind me the evening before and the morning of',
+      context,
+    );
+
+    expect(result.items[0].reminder?.notifyAt).toEqual(['evening_before', 'morning_of']);
+  });
+
+  // acceptance: single-default-notification - no notify phrasing leaves the field absent, which
+  // the store resolves to exactly one notification at eventAt
+  it('leaves notifyAt absent when the model returned none or an unusable one', async () => {
+    for (const notifyAt of [undefined, [], ['  '], 'not an array', [7]]) {
+      replyWithReminder(0.95, {
+        title: 'pay rent',
+        eventAt: '2026-09-25T12:00:00+03:00',
+        hasTimeOfDay: true,
+        notifyAt,
+      });
+
+      const result = await classifier.classify('Remind me on the 25th at 12 to pay rent', context);
+
+      expect(result.items[0].reminder?.notifyAt).toBeUndefined();
+    }
+  });
+
   it('forces confidence below CONFIDENCE_ASK when eventAt carries no offset', async () => {
     replyWithReminder(0.95, {
       title: 'ambiguous',

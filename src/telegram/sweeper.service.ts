@@ -72,15 +72,18 @@ export class SweeperService {
   }
 
   /**
-   * One tick. Delivers every reminder due before the next tick would run, so a notification lands
-   * up to one interval early and never late.
+   * One tick. Delivers every notification due before the next tick would run, so a nudge lands up
+   * to one interval early and never late.
    *
-   * Each reminder is **claimed then sent**: the `scheduled -> sent` flip happens in a transaction,
-   * and only the transaction's winner composes a delivery. Two overlapping ticks therefore cannot
-   * both notify. A send that fails is logged and left `sent` - for v1, losing one notification is
-   * preferable to the double-send a retry without a lease would risk.
+   * Each notification is **claimed then sent**: the `scheduled -> sent` flip happens in a
+   * transaction, and only the transaction's winner composes a delivery. Two overlapping ticks
+   * therefore cannot both notify. A send that fails is logged and left `sent` - for v1, losing one
+   * notification is preferable to the double-send a retry without a lease would risk.
    *
-   * Returns the number of deliveries sent. Never throws: one bad reminder must not abort the rest.
+   * The unit of work is the notification, not the reminder: one appointment with an evening-before
+   * and a morning-of nudge is delivered by two separate ticks, each claiming its own document.
+   *
+   * Returns the number of deliveries sent. Never throws: one bad document must not abort the rest.
    */
   async sweep(now: Date, sink?: string[]): Promise<number> {
     if (!this.reminders.available) {
@@ -89,30 +92,39 @@ export class SweeperService {
     }
 
     const cutoff = this.cutoff(now);
+
+    // Reminders written before notifications existed still carry the scalar `remindAt`. Converting
+    // them here - never fatally: a backfill that fails must not stop today's deliveries.
+    try {
+      await this.reminders.backfillLegacy(cutoff);
+    } catch (error) {
+      this.logger.error('Legacy reminder backfill failed', error as Error);
+    }
+
     const due = await this.reminders.findDue(cutoff);
     this.logger.log(
-      `Sweep found ${due.length} due reminder(s) up to ${cutoff.toISOString()} (${this.intervalMinutes}m look-ahead)`,
+      `Sweep found ${due.length} due notification(s) up to ${cutoff.toISOString()} (${this.intervalMinutes}m look-ahead)`,
     );
 
     let sent = 0;
-    for (const reminder of due) {
+    for (const notification of due) {
       try {
-        const claimed = await this.reminders.claimForSend(reminder.ref, now);
+        const claimed = await this.reminders.claimForSend(notification.ref, now);
         if (!claimed) {
           // Another tick won the race, or a button already moved it. Not an error.
-          this.logger.log(`Skipped reminder ${reminder.id}: no longer scheduled`);
+          this.logger.log(`Skipped notification ${notification.id}: no longer scheduled`);
           continue;
         }
 
-        await this.telegram.sendReminder(reminder, sink);
+        await this.telegram.sendReminder(notification, sink);
         sent += 1;
       } catch (error) {
         // Ids and counts only - the reminder's text is the user's private note.
-        this.logger.error(`Failed to deliver reminder ${reminder.id}`, error as Error);
+        this.logger.error(`Failed to deliver notification ${notification.id}`, error as Error);
       }
     }
 
-    this.logger.log(`Sweep delivered ${sent} of ${due.length} due reminder(s)`);
+    this.logger.log(`Sweep delivered ${sent} of ${due.length} due notification(s)`);
     return sent;
   }
 }

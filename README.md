@@ -186,20 +186,28 @@ Reminders are stored in Firestore, so create two databases and grant access.
    pencil, **Add another role**, and pick **Cloud Datastore User** (`roles/datastore.user`). Save.
    This one grant covers both databases. Without it, text and classification still work but every
    reminder replies that it could not be stored.
-4. Add a **Time-to-live (TTL)** policy so expired reminders are reaped automatically. On **each**
-   database (`(default)` and `test`): **Firestore -> TTL -> Create policy**, collection group
-   **`reminders`**, timestamp field **`expireAt`**. Each stored reminder sets `expireAt` to its
-   event time plus 24 hours.
+4. Add **two Time-to-live (TTL)** policies so expired reminders are reaped automatically. On
+   **each** database (`(default)` and `test`): **Firestore -> TTL -> Create policy**, once with
+   collection group **`reminders`** and once with collection group **`notifications`**, timestamp
+   field **`expireAt`** both times. A stored reminder sets `expireAt` to its event time plus 24
+   hours, and each of its notifications sets its own to that notification's time plus 24 hours.
+   Both policies are needed because Firestore does **not** cascade a delete into subcollections: a
+   reaped reminder would otherwise leave its notifications behind, still due.
 5. Add the **composite index** the delivery sweep queries through. On **each** database: **Firestore
    -> Indexes -> Composite -> Create index**.
-   - Collection **group** id: `reminders`
-   - Query scope: **Collection group** (not Collection - the sweep reads every user's reminders in
-     one query)
-   - Fields: `status` **Ascending**, then `remindAt` **Ascending**
+   - Collection **group** id: `notifications`
+   - Query scope: **Collection group** (not Collection - the sweep reads every user's notifications
+     in one query)
+   - Fields: `status` **Ascending**, then `at` **Ascending**
    - Click **Create** and wait for the status to go from *Building* to *Enabled*.
 
    If you skip this, the sweep fails with a `FAILED_PRECONDITION` whose message contains a Console
    link that creates exactly this index - following that link is an equally valid way to do it.
+
+   If this project already ran the single-notification version, keep the older `reminders`
+   (`status` Asc, `remindAt` Asc) index until the first few sweeps have run: it is what the one-time
+   backfill reads to turn each legacy `remindAt` into a notification. Once the sweep logs
+   `Backfilled 0 legacy reminder(s)` it is no longer used and can be deleted.
 
 ### 4. Let Cloud Build deploy the function
 
@@ -359,17 +367,25 @@ you open the page.
   `users/{userId}/reminders/{autoId}`. A reminder that names no clear time is **not** stored - the
   bot asks rather than guessing. `/export` replies with the requesting user's stored reminders as a
   single JSON object `{"reminders":[...]}`.
+- **One reminder can have several notify times.** "I have a doctor appointment on the 22nd at 2PM,
+  remind me the evening before and the morning of" is one appointment with **two** nudges: the
+  reminder keeps a single `eventAt`, and each nudge is its own document under
+  `users/{userId}/reminders/{reminderId}/notifications/{autoId}`. "Morning" means 09:00 local and
+  "evening" 19:00 local. A message that names no notify time gets exactly one notification, at
+  `eventAt`, so the simple case is unchanged. `/export` lists each reminder's notifications with
+  their ids, times and statuses.
 - **Reminders are delivered by a sweep, early rather than late.** A Cloud Scheduler job POSTs to
-  `/sweep` every 30 minutes; each tick sends every reminder due before the *next* tick, so a
-  reminder for 10:00 arrives at the 09:45-ish tick, up to 30 minutes early and never late. There are
-  no quiet hours. A reminder is flipped `scheduled -> sent` inside a Firestore transaction *before*
-  it is sent, so two overlapping ticks can never notify twice; a send that fails is logged and not
-  retried.
-- **Each delivered reminder carries OK / +1h / Tomorrow buttons.** `OK` marks it `acked`, `+1h`
-  reschedules it to an hour after the tap, `Tomorrow` to 09:00 local the next day. A snooze moves
-  only `remindAt` - `eventAt`, when the thing itself happens, is never rewritten. Taps arrive on the
-  same webhook, so they pass the same secret check and the same `ALLOWED_USERS` gate, and a reminder
-  can only be moved by the user who created it.
+  `/sweep` every 30 minutes; each tick sends every notification due before the *next* tick, so a
+  nudge for 10:00 arrives at the 09:45-ish tick, up to 30 minutes early and never late. There are
+  no quiet hours. A notification is flipped `scheduled -> sent` inside a Firestore transaction
+  *before* it is sent, so two overlapping ticks can never notify twice; a send that fails is logged
+  and not retried. Each nudge of the same reminder is claimed and sent on its own.
+- **Each delivered notification carries OK / +1h / Tomorrow buttons.** `OK` marks **that
+  notification** `acked`, `+1h` reschedules it to an hour after the tap, `Tomorrow` to 09:00 local
+  the next day. A snooze moves only that notification's time - `eventAt`, when the thing itself
+  happens, is never rewritten, and the reminder's other nudges still fire as scheduled. Taps arrive
+  on the same webhook, so they pass the same secret check and the same `ALLOWED_USERS` gate, and a
+  notification can only be moved by the user who created it.
 - **`X-Test-Now` is test-only.** On the test function (`TEST_REFLECT_REPLY=true`) an
   `X-Test-Now: 2026-09-16T09:00:00+03:00` header pins "now" for that one request, so relative-date
   resolution is deterministic in verification. Production has reflection off and ignores the header

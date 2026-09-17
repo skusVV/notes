@@ -23,6 +23,13 @@ export interface ReminderDraft {
   title: string;
   /** ISO 8601 with offset, resolved from relative speech using the user's timezone. */
   eventAt?: string;
+  /**
+   * When to nudge, one entry per notify time the message asked for - "remind me the evening before
+   * and the morning of" is two. Each entry is an ISO 8601 instant with offset or one of the
+   * relative keywords in `RELATIVE_NOTIFY`. Empty means the message named no notify time, which
+   * resolves to a single notification at `eventAt`.
+   */
+  notifyAt?: string[];
   /** Absent means the user did not say - the bot has to ask rather than guess. */
   leadMinutes?: number;
   recurrence?: string;

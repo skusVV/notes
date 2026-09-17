@@ -32,7 +32,7 @@ export class ClockService {
   /**
    * Formats an instant as a local-time ISO string with offset for a given IANA timezone, e.g.
    * `2026-09-16T09:00:00+03:00` - the form the classifier prompt states as "now" and the form
-   * `eventAt`/`remindAt` are stored and exported in. Seconds precision, no milliseconds. An
+   * `eventAt` and a notification's `atLocal` are stored and exported in. Seconds precision, no milliseconds. An
    * unknown zone degrades to UTC rather than throwing.
    */
   formatLocal(instant: Date, timezone: string): string {

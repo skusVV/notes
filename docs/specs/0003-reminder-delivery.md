@@ -1,6 +1,6 @@
 ---
 id: 0003-reminder-delivery
-state: IMPLEMENTED
+state: IN-TESTING
 attempt: 0
 max_attempts: 3
 branch: feat/0003-reminder-delivery

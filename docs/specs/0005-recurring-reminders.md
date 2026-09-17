@@ -1,6 +1,6 @@
 ---
 id: 0005-recurring-reminders
-state: DRAFT
+state: READY
 attempt: 0
 max_attempts: 3
 branch: feat/0005-recurring-reminders
@@ -99,7 +99,7 @@ as `null`/absent.
 - Occurrence times are computed from local wall-clock + timezone, so a summer and a winter occurrence
   of the same rule resolve to the correct, different UTC instants.
 
-## Acceptance criteria (proposed - not yet locked)
+## Acceptance criteria (locked)
 
 See frontmatter. Proven by: a birthday captured as a yearly, no-expiry reminder with its next
 occurrence scheduled; the occurrence rolling forward a year after it fires; a winter occurrence

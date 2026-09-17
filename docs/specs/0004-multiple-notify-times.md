@@ -1,6 +1,6 @@
 ---
 id: 0004-multiple-notify-times
-state: DRAFT
+state: READY
 attempt: 0
 max_attempts: 3
 branch: feat/0004-multiple-notify-times
@@ -98,7 +98,7 @@ fresh, so this is documented but not an acceptance criterion.
 - Snooshing or acking one notification never changes another notification of the same reminder, and
   never moves `eventAt`.
 
-## Acceptance criteria (proposed - not yet locked)
+## Acceptance criteria (locked)
 
 See frontmatter. Distinct `from.id` per test for isolation; "now" pinned per request. The engine is
 proven by: two nudges captured from one appointment, the single-time case still yielding one

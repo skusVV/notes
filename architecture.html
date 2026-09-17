@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notes Bot Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f5f0;
+    --surface: #ffffff;
+    --surface-2: #eceee6;
+    --ink: #14181f;
+    --ink-dim: #5b6270;
+    --line: #dcded5;
+    --accent: #0e7490;
+    --accent-soft: #e2f1f3;
+    --accent-2: #a06a1f;
+    --accent-2-soft: #f7ecd8;
+    --danger: #9c3f2e;
+    --danger-soft: #f6e5e0;
+    --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10131a;
+      --surface: #171b23;
+      --surface-2: #1e232c;
+      --ink: #e7eaf0;
+      --ink-dim: #9aa3b2;
+      --line: #2b303b;
+      --accent: #3cc7dd;
+      --accent-soft: #15303a;
+      --accent-2: #e3ab55;
+      --accent-2-soft: #35291a;
+      --danger: #e08a76;
+      --danger-soft: #3a221d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light dark; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  code, .mono { font-family: var(--font-mono); }
+  a { color: var(--accent); }
+  h1, h2, h3 { text-wrap: balance; font-weight: 600; }
+  h1 { font-size: clamp(24px, 3vw, 32px); margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 0 0 4px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  h3 { font-size: 15.5px; margin: 0 0 8px; }
+  p { margin: 0 0 12px; max-width: 66ch; }
+  .section-intro { color: var(--ink-dim); max-width: 70ch; }
+  section { scroll-margin-top: 72px; padding-bottom: 56px; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: none; }
+
+  /* ---- layout ---- */
+  .layout { display: flex; align-items: flex-start; }
+  .sidebar {
+    width: 250px; flex-shrink: 0; position: sticky; top: 0; height: 100vh;
+    overflow-y: auto; padding: 22px 14px 22px 22px; border-right: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .side-head { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-dim); margin: 0 0 10px 8px; }
+  .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav-link {
+    display: block; padding: 7px 8px; border-radius: 7px; color: var(--ink-dim);
+    text-decoration: none; font-size: 13.5px; border-left: 2px solid transparent;
+  }
+  .nav-link:hover { background: var(--surface-2); color: var(--ink); }
+  .nav-link.active { color: var(--accent); background: var(--accent-soft); border-left-color: var(--accent); font-weight: 500; }
+  .sidebar-divider { height: 1px; background: var(--line); margin: 14px 8px; }
+  .planned-toggle {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px; margin: 0 0 0 0;
+    font-size: 12.5px; color: var(--ink-dim); border-radius: 7px; cursor: pointer;
+  }
+  .planned-toggle:hover { background: var(--surface-2); }
+  .planned-toggle input { margin-top: 2px; accent-color: var(--accent-2); flex-shrink: 0; }
+
+  .content { flex: 1; min-width: 0; padding: 36px clamp(18px, 4vw, 56px) 90px; max-width: 1180px; }
+
+  .masthead { padding-bottom: 28px; margin-bottom: 8px; }
+  .masthead-meta { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin-top: 14px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line); font-size: 12.5px; color: var(--ink-dim);
+  }
+  .chip.mono { font-family: var(--font-mono); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 18px 0 6px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-dim); }
+  .swatch { width: 22px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+  .swatch.live { background: var(--accent-soft); border: 1.5px solid var(--accent); }
+  .swatch.planned { background: var(--accent-2-soft); border: 1.5px dashed var(--accent-2); }
+  .swatch.test { background: var(--surface-2); border: 1.5px dashed var(--ink-dim); }
+
+  .stat-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 6px; }
+  .stat {
+    flex: 1 1 160px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat .num { font-family: var(--font-mono); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .lbl { font-size: 12px; color: var(--ink-dim); margin-top: 2px; }
+
+  figure { margin: 20px 0 8px; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  .diagram-frame { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; }
+  figcaption { font-size: 13px; color: var(--ink-dim); margin-top: 10px; max-width: 70ch; }
+
+  .box-title { font-family: var(--font-sans); font-weight: 600; fill: var(--ink); font-size: 13px; }
+  .box-sub { font-family: var(--font-mono); fill: var(--ink-dim); font-size: 10.5px; }
+  .box-live { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+  .box-planned { fill: var(--accent-2-soft); stroke: var(--accent-2); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .box-test { fill: var(--surface-2); stroke: var(--ink-dim); stroke-width: 1.3; stroke-dasharray: 4 3; }
+  .box-danger { fill: var(--danger-soft); stroke: var(--danger); stroke-width: 1.5; }
+  .box-neutral { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.3; }
+  .arrow { stroke: var(--ink-dim); stroke-width: 1.5; fill: none; }
+  .arrow-planned { stroke: var(--accent-2); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+  .arrow-danger { stroke: var(--danger); stroke-width: 1.5; fill: none; }
+  .arrow-label { font-family: var(--font-mono); font-size: 10.5px; fill: var(--ink-dim); }
+  .tag-planned { font-family: var(--font-mono); font-size: 9.5px; fill: var(--accent-2); font-weight: 600; }
+  .margin-note { font-family: var(--font-sans); font-size: 11.5px; fill: var(--ink-dim); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  .table-frame { border: 1px solid var(--line); border-radius: 10px; overflow: auto; background: var(--surface); }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-dim); font-weight: 600; background: var(--surface-2); position: sticky; top: 0; }
+  tr:last-child td { border-bottom: none; }
+  tr.planned td { background: var(--accent-2-soft); }
+  td .mono { font-size: 12.5px; }
+
+  .badge { display: inline-block; font-family: var(--font-mono); font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 999px; letter-spacing: .02em; }
+  .badge-live { background: var(--accent-soft); color: var(--accent); }
+  .badge-planned { background: var(--accent-2-soft); color: var(--accent-2); }
+  .badge-test { background: var(--surface-2); color: var(--ink-dim); }
+  .badge-danger { background: var(--danger-soft); color: var(--danger); }
+
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin: 16px 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h4 { margin: 0 0 6px; font-size: 14px; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--ink-dim); }
+
+  details.schema-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+  details.schema-card summary { cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  details.schema-card summary::-webkit-details-marker { display: none; }
+  details.schema-card summary::after { content: '+'; font-family: var(--font-mono); color: var(--ink-dim); font-size: 16px; flex-shrink: 0; }
+  details.schema-card[open] summary::after { content: '−'; }
+  details.schema-card summary .mono { font-weight: 400; color: var(--ink-dim); font-size: 12px; }
+  details.schema-card table { margin-top: 12px; }
+
+  .code-path { font-family: var(--font-mono); font-size: 13px; color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  .code-path:hover { color: var(--accent); }
+
+  .stepper { display: flex; flex-direction: column; gap: 0; margin: 16px 0; }
+  .step-row { display: grid; grid-template-columns: 28px 1fr; gap: 14px; }
+  .step-rail { display: flex; flex-direction: column; align-items: center; }
+  .step-dot { width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); border: 1.5px solid var(--accent); color: var(--accent); font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step-row:last-child .step-line { display: none; }
+  .step-line { flex: 1; width: 1.5px; background: var(--line); margin: 2px 0; min-height: 18px; }
+  .step-body { padding-bottom: 20px; }
+  .step-body h4 { margin: 0 0 3px; font-size: 14.5px; }
+  .step-body p { margin: 0; font-size: 13.5px; color: var(--ink-dim); }
+  .step-body .why { font-size: 12.5px; color: var(--ink-dim); margin-top: 4px; }
+  .step-body .why b { color: var(--ink); font-weight: 600; }
+
+  .callout { border-left: 3px solid var(--accent-2); background: var(--accent-2-soft); border-radius: 0 8px 8px 0; padding: 10px 14px; font-size: 13.5px; margin: 14px 0; }
+  .callout.danger { border-left-color: var(--danger); background: var(--danger-soft); }
+  .callout p:last-child { margin-bottom: 0; }
+
+  footer { color: var(--ink-dim); font-size: 12.5px; padding-top: 30px; }
+  footer .mono { color: var(--ink-dim); }
+
+  body.hide-planned .planned,
+  body.hide-planned tr.planned { display: none; }
+
+  @media (max-width: 880px) {
+    .layout { flex-direction: column; }
+    .sidebar {
+      position: sticky; top: 0; width: 100%; height: auto; flex-direction: row;
+      overflow-x: auto; overflow-y: hidden; border-right: none; border-bottom: 1px solid var(--line);
+      padding: 10px 12px; z-index: 5;
+    }
+    .side-head { display: none; }
+    .sidebar nav { flex-direction: row; }
+    .nav-link { white-space: nowrap; border-left: none; border-bottom: 2px solid transparent; }
+    .nav-link.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+    .sidebar-divider { display: none; }
+    .planned-toggle { white-space: nowrap; }
+    .content { padding-top: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="m-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-dim)"/>
+    </marker>
+    <marker id="m-arrow-danger" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--danger)"/>
+    </marker>
+    <marker id="m-arrow-planned" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--accent-2)"/>
+    </marker>
+    <marker id="m-arrow-accent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+    </marker>
+  </defs>
+</svg>
+
+<div class="layout">
+  <aside class="sidebar">
+    <p class="side-head">notes-bot</p>
+    <nav id="side-nav">
+      <a class="nav-link" href="#overview">Overview</a>
+      <a class="nav-link" href="#system-map">System Map</a>
+      <a class="nav-link" href="#request-flow">Request Flow</a>
+      <a class="nav-link" href="#classification">Classification</a>
+      <a class="nav-link" href="#code-map">Code Map</a>
+      <a class="nav-link" href="#config">Config &amp; Secrets</a>
+      <a class="nav-link" href="#deploy">Deploy Pipeline</a>
+      <a class="nav-link" href="#workflow">Delivery Workflow</a>
+      <a class="nav-link" href="#planned">Planned: Memory Layer</a>
+      <a class="nav-link" href="#tooling">Tooling Inventory</a>
+    </nav>
+    <div class="sidebar-divider"></div>
+    <label class="planned-toggle">
+      <input type="checkbox" id="hide-planned-toggle">
+      <span>Hide everything marked <b style="color:var(--accent-2)">PLANNED</b> - show only what runs today</span>
+    </label>
+  </aside>
+
+  <main class="content">
+
+    <div class="masthead">
+      <h1>Notes Bot Architecture</h1>
+      <p class="section-intro">A Telegram bot that today classifies messages and stores reminders, running as one Google Cloud Function. Everything on this page marked <span class="badge badge-planned">PLANNED</span> is designed but not built yet - see <a href="docs/architecture.md" class="code-path">docs/architecture.md</a> for the full reasoning.</p>
+      <div class="masthead-meta">
+        <span class="chip mono">v1.0.0</span>
+        <span class="chip mono">commit 77135a1</span>
+        <span class="chip">generated 2026-09-17</span>
+        <span class="chip mono">regenerate: /update-architecture-docs</span>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><span class="swatch live"></span> Built &amp; live in production</div>
+        <div class="legend-item"><span class="swatch planned"></span> Planned - no code written yet</div>
+        <div class="legend-item"><span class="swatch test"></span> Built, but an isolated test-only lane</div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <section id="overview">
+      <h2>Overview</h2>
+      <p class="section-intro">The bot receives a Telegram message, decides what kind of thing it is (a note, a reminder, a symptom, a question, and so on), and replies describing what it understood. It calls Google's Gemini model twice per message at most - once to turn speech into text, once to classify the text. Until recently it kept no memory between messages; now a resolved reminder is written to Firestore, the first slice of the persistence layer.</p>
+
+      <div class="stat-row">
+        <div class="stat"><div class="num">1</div><div class="lbl">Cloud Function (gen2) + Firestore</div></div>
+        <div class="stat"><div class="num">7</div><div class="lbl">classifier intents</div></div>
+        <div class="stat"><div class="num">2</div><div class="lbl">Gemini calls per message, max</div></div>
+        <div class="stat"><div class="num">~$0.65<span style="font-size:12px">/mo</span></div><div class="lbl">today, at ~20 msgs/day</div></div>
+        <div class="stat"><div class="num badge badge-live" style="font-size:15px">1</div><div class="lbl">Firestore collection live: reminders</div></div>
+      </div>
+
+      <div class="callout">
+        <p><b>Persistence has begun.</b> Reminders with a clear date and time are now stored in Firestore; the other intents are still only previewed, so a reply that did not store everything it acted on still ends with a notice saying so. The <a href="#planned" class="code-path">Planned: Memory Layer</a> section below is the rest of the phase: the entries capture log, Cloud Scheduler delivery, and Vertex embeddings turn these replies into a searchable, remembered history.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="system-map">
+      <h2>System Map</h2>
+      <p class="section-intro">Who talks to whom. One Cloud Function sits in the middle: Telegram sends it updates over a webhook, it calls Vertex AI (Google's hosted Gemini models) for both speech-to-text and classification, it now writes reminders to Firestore, and Cloud Build redeploys it automatically on every push. The amber box at the bottom (Cloud Scheduler) is not built yet - it shows where the rest of the planned memory layer plugs in.</p>
+
+      <figure class="diagram-frame">
+        <svg viewBox="0 0 1060 660" role="img" aria-label="Telegram sends webhook updates to a Cloud Function running NestJS, which calls Vertex AI's Gemini model to transcribe and classify messages; Secret Manager injects credentials and Cloud Build deploys the function on every GitHub push; a planned Firestore database and Cloud Scheduler sweeper are not yet connected.">
+
+          <!-- GitHub -->
+          <rect class="box-live" x="40" y="30" width="190" height="60" rx="9"/>
+          <text class="box-title" x="135" y="55" text-anchor="middle">GitHub</text>
+          <text class="box-sub" x="135" y="72" text-anchor="middle">push to main</text>
+
+          <!-- Cloud Build -->
+          <rect class="box-live" x="300" y="30" width="220" height="60" rx="9"/>
+          <text class="box-title" x="410" y="55" text-anchor="middle">Cloud Build</text>
+          <text class="box-sub" x="410" y="72" text-anchor="middle">trigger: push → main</text>
+
+          <line class="arrow" x1="230" y1="60" x2="296" y2="60" marker-end="url(#m-arrow)"/>
+
+          <!-- Secret Manager -->
+          <rect class="box-live" x="40" y="150" width="190" height="86" rx="9"/>
+          <text class="box-title" x="135" y="177" text-anchor="middle">Secret Manager</text>
+          <text class="box-sub" x="135" y="194" text-anchor="middle">TELEGRAM_BOT_TOKEN</text>
+          <text class="box-sub" x="135" y="208" text-anchor="middle">WEBHOOK_SECRET</text>
+          <text class="box-sub" x="135" y="222" text-anchor="middle">ALLOWED_USERS</text>
+
+          <!-- Telegram -->
+          <rect class="box-live" x="40" y="330" width="190" height="110" rx="9"/>
+          <text class="box-title" x="135" y="368" text-anchor="middle">Telegram</text>
+          <text class="box-sub" x="135" y="386" text-anchor="middle">Bot API</text>
+          <text class="box-sub" x="135" y="400" text-anchor="middle">(webhook + sendMessage)</text>
+
+          <!-- Cloud Function -->
+          <rect class="box-live" x="300" y="300" width="420" height="170" rx="10"/>
+          <text class="box-title" x="510" y="326" text-anchor="middle">Cloud Function · telegramBot</text>
+          <text class="box-sub" x="510" y="343" text-anchor="middle">gen2 · NestJS 11 · Express</text>
+          <line x1="330" y1="356" x2="690" y2="356" stroke="var(--line)"/>
+          <text class="box-sub" x="510" y="378" text-anchor="middle">TelegramController → TelegramService</text>
+          <text class="box-sub" x="510" y="396" text-anchor="middle">TranscriptionService · ClassifierService</text>
+          <text class="box-sub" x="510" y="414" text-anchor="middle">(Vertex AI clients, no API key - ADC)</text>
+          <text class="box-sub" x="510" y="440" text-anchor="middle" style="fill:var(--ink-dim)">ALLOWED_USERS gate runs first on every update</text>
+
+          <!-- Vertex AI -->
+          <rect class="box-live" x="790" y="300" width="230" height="170" rx="10"/>
+          <text class="box-title" x="905" y="328" text-anchor="middle">Vertex AI</text>
+          <text class="box-sub" x="905" y="346" text-anchor="middle">Gemini 3.5 Flash Lite</text>
+          <line x1="810" y1="358" x2="1000" y2="358" stroke="var(--line)"/>
+          <text class="box-sub" x="905" y="378" text-anchor="middle">generateContent</text>
+          <text class="box-sub" x="905" y="392" text-anchor="middle">(transcribe · classify)</text>
+          <rect class="planned box-planned" x="805" y="410" width="200" height="46" rx="7"/>
+          <text class="planned tag-planned" x="905" y="426" text-anchor="middle">PLANNED</text>
+          <text class="planned box-sub" x="905" y="442" text-anchor="middle">embedContent (RAG)</text>
+
+          <!-- arrows: cb -> cf -->
+          <line class="arrow" x1="410" y1="90" x2="410" y2="298" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="418" y="200">gcloud functions deploy --gen2</text>
+          <text class="arrow-label" x="418" y="213">--source=. (runs inside the build)</text>
+
+          <!-- arrows: sm -> cf -->
+          <path class="arrow" d="M230,193 L270,193 L270,340 L298,340" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="236" y="185">--set-secrets at deploy</text>
+
+          <!-- arrows: tg <-> cf -->
+          <line class="arrow" x1="230" y1="360" x2="298" y2="360" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="235" y="352">POST / (webhook update)</text>
+          <line class="arrow" x1="298" y1="405" x2="230" y2="405" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="235" y="422">sendMessage (≤4096 chars/chunk)</text>
+
+          <!-- arrows: cf <-> va -->
+          <line class="arrow" x1="722" y1="355" x2="788" y2="355" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="727" y="347" style="font-size:9.5px">generateContent</text>
+
+          <!-- Firestore (live: reminders) -->
+          <rect class="box-live" x="300" y="530" width="200" height="86" rx="9"/>
+          <text class="box-title" x="400" y="562" text-anchor="middle">Firestore</text>
+          <text class="box-sub" x="400" y="580" text-anchor="middle">Native mode, europe-west1</text>
+          <text class="box-sub" x="400" y="596" text-anchor="middle">reminders (live)</text>
+
+          <!-- Cloud Scheduler (planned) -->
+          <rect class="planned box-planned" x="540" y="530" width="200" height="86" rx="9"/>
+          <text class="planned tag-planned" x="640" y="550" text-anchor="middle">PLANNED</text>
+          <text class="planned box-title" x="640" y="568" text-anchor="middle" style="fill:var(--ink)">Cloud Scheduler</text>
+          <text class="planned box-sub" x="640" y="584" text-anchor="middle">cron → same function</text>
+          <text class="planned box-sub" x="640" y="598" text-anchor="middle">reminder sweeper, ~1/min</text>
+
+          <!-- Firestore arrow live; Scheduler arrow still planned -->
+          <line class="arrow" x1="400" y1="528" x2="400" y2="472" marker-end="url(#m-arrow)"/>
+          <line class="planned arrow-planned" x1="640" y1="528" x2="640" y2="472" marker-end="url(#m-arrow-planned)"/>
+          <text class="arrow-label" x="405" y="502">read/write per user</text>
+          <text class="planned arrow-label" x="645" y="502" style="fill:var(--accent-2)">HTTP trigger</text>
+        </svg>
+        <figcaption>Today: Telegram ↔ one Cloud Function ↔ Vertex AI, with reminders now written to Firestore, redeployed by Cloud Build on every push. Amber: the Cloud Scheduler sweeper that will deliver due reminders, not yet wired up.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="request-flow">
+      <h2>Request Flow</h2>
+      <p class="section-intro">What happens to one incoming message, in order. Two steps in this chain are load-bearing precisely because of their <em>position</em>, not just their logic - moving either one down the list would change what strangers can do to this bot.</p>
+
+      <figure class="diagram-frame">
+        <svg viewBox="0 0 860 980" role="img" aria-label="A Telegram update is checked for a valid secret token, then for having text or voice, then against the ALLOWED_USERS allowlist, before any command routing, voice transcription, or classification happens; the webhook always answers HTTP 200.">
+
+          <!-- margin annotations -->
+          <text class="margin-note" x="10" y="215"><tspan x="10" dy="0">① must run before the</tspan><tspan x="10" dy="13">allow-gate below, or a</tspan><tspan x="10" dy="13">stranger's sticker draws</tspan><tspan x="10" dy="13">a refusal instead of silence</tspan></text>
+          <line x1="150" y1="228" x2="238" y2="228" class="arrow" stroke-dasharray="2 3" marker-end="url(#m-arrow)"/>
+
+          <text class="margin-note" x="10" y="300"><tspan x="10" dy="0">② must run before any</tspan><tspan x="10" dy="13">voice download or Gemini</tspan><tspan x="10" dy="13">call - the money gate</tspan></text>
+          <line x1="150" y1="313" x2="238" y2="313" class="arrow" stroke-dasharray="2 3" marker-end="url(#m-arrow)"/>
+
+          <!-- S1 -->
+          <rect class="box-live" x="240" y="20" width="340" height="56" rx="8"/>
+          <text class="box-title" x="410" y="53" text-anchor="middle">Telegram webhook: POST /</text>
+          <line class="arrow" x1="410" y1="76" x2="410" y2="108" marker-end="url(#m-arrow)"/>
+
+          <!-- S2 -->
+          <rect class="box-danger" x="240" y="110" width="340" height="56" rx="8"/>
+          <text class="box-title" x="410" y="143" text-anchor="middle">Check X-Telegram-Bot-Api-Secret-Token</text>
+          <line class="arrow-danger" x1="580" y1="138" x2="648" y2="138" marker-end="url(#m-arrow-danger)"/>
+          <rect class="box-danger" x="650" y="110" width="150" height="56" rx="8"/>
+          <text class="box-sub" x="725" y="134" text-anchor="middle" style="fill:var(--danger)">401</text>
+          <text class="box-sub" x="725" y="149" text-anchor="middle">dropped, unprocessed</text>
+          <line class="arrow" x1="410" y1="166" x2="410" y2="198" marker-end="url(#m-arrow)"/>
+
+          <!-- S3 -->
+          <rect class="box-live" x="240" y="200" width="340" height="56" rx="8"/>
+          <text class="box-title" x="410" y="233" text-anchor="middle">Has text or voice?</text>
+          <line class="arrow" x1="580" y1="228" x2="648" y2="228" marker-end="url(#m-arrow)"/>
+          <rect class="box-test" x="650" y="200" width="150" height="56" rx="8"/>
+          <text class="box-sub" x="725" y="224" text-anchor="middle">no →</text>
+          <text class="box-sub" x="725" y="239" text-anchor="middle">ignored, no reply</text>
+          <line class="arrow" x1="410" y1="256" x2="410" y2="288" marker-end="url(#m-arrow)"/>
+
+          <!-- S4 -->
+          <rect class="box-danger" x="240" y="290" width="340" height="56" rx="8"/>
+          <text class="box-title" x="410" y="315" text-anchor="middle">ALLOWED_USERS gate</text>
+          <text class="box-sub" x="410" y="333" text-anchor="middle">unset/empty = everyone allowed</text>
+          <line class="arrow-danger" x1="580" y1="313" x2="648" y2="313" marker-end="url(#m-arrow-danger)"/>
+          <rect class="box-danger" x="650" y="290" width="150" height="56" rx="8"/>
+          <text class="box-sub" x="725" y="314" text-anchor="middle">no →</text>
+          <text class="box-sub" x="725" y="329" text-anchor="middle">refusal, names sender id</text>
+          <line class="arrow" x1="410" y1="346" x2="410" y2="378" marker-end="url(#m-arrow)"/>
+
+          <!-- S5 -->
+          <rect class="box-live" x="240" y="380" width="340" height="56" rx="8"/>
+          <text class="box-title" x="410" y="405" text-anchor="middle">Starts with "/" ?</text>
+          <text class="box-sub" x="410" y="423" text-anchor="middle">/start · /help · /version · /export - before the model, always</text>
+          <path class="arrow" d="M580,408 L620,408 L620,830 L582,830" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="626" y="620" transform="rotate(90 626 620)">handleCommand → reply directly</text>
+          <line class="arrow" x1="410" y1="436" x2="410" y2="468" marker-end="url(#m-arrow)"/>
+
+          <!-- S6 -->
+          <rect class="box-live" x="240" y="470" width="340" height="76" rx="8"/>
+          <text class="box-title" x="410" y="495" text-anchor="middle">Voice present?</text>
+          <text class="box-sub" x="410" y="513" text-anchor="middle">check duration/size → download → transcribe</text>
+          <text class="box-sub" x="410" y="527" text-anchor="middle">TranscriptionService (Vertex AI, audio/ogg)</text>
+          <text class="box-sub" x="410" y="541" text-anchor="middle">→ one plain-text transcript</text>
+          <line class="arrow" x1="410" y1="546" x2="410" y2="578" marker-end="url(#m-arrow)"/>
+
+          <!-- S7 -->
+          <rect class="box-live" x="240" y="580" width="340" height="76" rx="8"/>
+          <text class="box-title" x="410" y="605" text-anchor="middle">route(text): classify</text>
+          <text class="box-sub" x="410" y="623" text-anchor="middle">ClassifierService (Vertex AI, JSON schema, temp 0)</text>
+          <text class="box-sub" x="410" y="637" text-anchor="middle">→ items[] - intent, confidence, extracted fields</text>
+          <text class="box-sub" x="410" y="651" text-anchor="middle" style="fill:var(--ink-dim)">model error → falls back to a single "other" item</text>
+          <line class="arrow" x1="410" y1="656" x2="410" y2="688" marker-end="url(#m-arrow)"/>
+
+          <!-- S8 -->
+          <rect class="box-live" x="240" y="690" width="340" height="76" rx="8"/>
+          <text class="box-title" x="410" y="715" text-anchor="middle">Per-intent handler; reminder persisted</text>
+          <text class="box-sub" x="410" y="733" text-anchor="middle">note · reminder · symptom · question</text>
+          <text class="box-sub" x="410" y="747" text-anchor="middle">actor_info · correction · other</text>
+          <text class="box-sub" x="410" y="761" text-anchor="middle" style="fill:var(--ink-dim)">reminder → Firestore + confirm · confidence &lt; 0.5 → asks</text>
+          <line class="arrow" x1="410" y1="766" x2="410" y2="798" marker-end="url(#m-arrow)"/>
+
+          <!-- S9 -->
+          <rect class="box-live" x="240" y="800" width="340" height="60" rx="8"/>
+          <text class="box-title" x="410" y="825" text-anchor="middle">splitForTelegram → sendMessage</text>
+          <text class="box-sub" x="410" y="842" text-anchor="middle">≤ 4096 chars per chunk, no parse_mode</text>
+          <line class="arrow" x1="410" y1="860" x2="410" y2="892" marker-end="url(#m-arrow)"/>
+
+          <!-- S10 -->
+          <rect class="box-live" x="240" y="894" width="340" height="56" rx="8"/>
+          <text class="box-title" x="410" y="919" text-anchor="middle">Controller returns 200 - always</text>
+          <text class="box-sub" x="410" y="936" text-anchor="middle">thrown errors are logged, never surfaced to Telegram</text>
+        </svg>
+        <figcaption>The allowlist gate (④) and the has-content check (③) each have to run in this exact order - swap them and either strangers get billed model calls, or silent update types start drawing refusal replies.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="classification">
+      <h2>Classification</h2>
+      <p class="section-intro">One Gemini call per message returns a list of intents - a list, not a single label, because "I have a headache and remind me to call the doctor" is genuinely two things. A confidence score on each item decides whether the bot acts quietly, acts but shows its interpretation, or asks instead of guessing.</p>
+
+      <figure class="diagram-frame">
+        <svg viewBox="0 0 640 110" role="img" aria-label="Confidence scale from 0 to 1: below 0.5 the bot asks instead of filing, between 0.5 and 0.8 it acts but shows its confidence, above 0.8 it acts with a quiet acknowledgement.">
+          <rect x="40" y="48" width="280" height="24" fill="var(--danger-soft)" stroke="var(--danger)"/>
+          <rect x="320" y="48" width="168" height="24" fill="var(--accent-2-soft)" stroke="var(--accent-2)"/>
+          <rect x="488" y="48" width="112" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text class="box-sub" x="180" y="40" text-anchor="middle" style="fill:var(--danger)">ask instead of filing</text>
+          <text class="box-sub" x="404" y="40" text-anchor="middle" style="fill:var(--accent-2)">act, but show the score</text>
+          <text class="box-sub" x="544" y="40" text-anchor="middle" style="fill:var(--accent)">act quietly</text>
+          <line x1="40" y1="48" x2="40" y2="82" stroke="var(--ink-dim)"/>
+          <line x1="320" y1="48" x2="320" y2="82" stroke="var(--ink-dim)"/>
+          <line x1="488" y1="48" x2="488" y2="82" stroke="var(--ink-dim)"/>
+          <line x1="600" y1="48" x2="600" y2="82" stroke="var(--ink-dim)"/>
+          <text class="arrow-label" x="40" y="96" text-anchor="middle">0</text>
+          <text class="arrow-label" x="320" y="96" text-anchor="middle">0.5 CONFIDENCE_ASK</text>
+          <text class="arrow-label" x="488" y="96" text-anchor="middle">0.8 CONFIDENCE_QUIET</text>
+          <text class="arrow-label" x="600" y="96" text-anchor="middle">1.0</text>
+        </svg>
+        <figcaption>The two thresholds are exact constants in <a href="src/classifier/classifier.types.ts" class="code-path">classifier.types.ts</a>, not a description - this is a confidence score, not a build-status indicator (unrelated to the amber "planned" color used elsewhere on this page).</figcaption>
+      </figure>
+
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>Intent</th><th>Meaning</th><th>Today</th><th>Once memory ships</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">note</td><td>A thought or fact worth remembering - the default for anything worth keeping</td><td>Reported back</td><td class="planned">Embedded + tagged, becomes searchable</td></tr>
+            <tr><td class="mono">reminder</td><td>Something to be reminded about later; asks if no time was given</td><td>Resolved to an instant and <b>stored</b> in <span class="mono">reminders</span></td><td class="planned">Delivered by the Scheduler sweeper (spec 0003)</td></tr>
+            <tr><td class="mono">symptom</td><td>A health event for the user or someone they name</td><td>Reported back</td><td class="planned">Written to <span class="mono">symptoms</span>, normalized type</td></tr>
+            <tr><td class="mono">question</td><td>Asking to read back their own history - never answered today</td><td>"I cannot answer yet, no history to search"</td><td class="planned">Runs retrieval: structured query, vector search, or both</td></tr>
+            <tr><td class="mono">actor_info</td><td>A fact about a named person ("my wife's birthday is in May")</td><td>Reported back</td><td class="planned">Updates an <span class="mono">actors</span> record, not a note</td></tr>
+            <tr><td class="mono">correction</td><td>Fixing or undoing the previous message ("no, that was 3pm")</td><td>"I cannot apply it - nothing is stored to correct"</td><td class="planned">Mutates the previous entry's projection</td></tr>
+            <tr><td class="mono">other</td><td>None of the above, or the model isn't sure - not treated as an error</td><td>Kept as a plain note</td><td class="planned">Still embedded and tagged; the "other" rate is a signal to add an intent</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="section-intro" style="margin-top:10px">Three defensive rules in <a href="src/classifier/classifier.service.ts" class="code-path">classifier.service.ts</a> keep a bad model reply from ever becoming a crash: an unknown intent is dropped, a payload that fails validation (a reminder with no title) has its confidence forced below the "ask" threshold instead of being repaired, and an absent field (severity, lead time) is <em>never</em> guessed - a fabricated number would quietly corrupt every later average.</p>
+
+      <h3 style="margin-top:22px">Reminders: resolving a time without inventing one</h3>
+      <p class="section-intro">Spec 0002 added a fourth guard for reminders. The classifier is now handed the current local time (the new <span class="mono">now</span> field on <span class="mono">ClassifierContext</span>) and told to resolve relative speech - "Thursday at 12", "next Thursday", "the 25th" - into an ISO instant carrying the user's offset. It also returns a required <span class="mono">hasTimeOfDay</span> flag: <span class="mono">true</span> only when the message stated an explicit clock time, <span class="mono">false</span> for a bare date or weekday.</p>
+      <div class="callout">
+        <p><b>The invent-nothing rule.</b> When <span class="mono">hasTimeOfDay</span> is false, the code forces the item's confidence below <span class="mono">CONFIDENCE_ASK</span>, so the bot asks instead of filing a guessed time. This is a deterministic backstop: a model that copies the hour from "now" produces a valid-looking instant that <a href="src/reminders/event-at.ts" class="code-path">normalizeEventAt</a> alone cannot catch, so a reminder whose time of day was never actually spoken is treated as unresolved even when its <span class="mono">eventAt</span> parses.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="code-map">
+      <h2>Code Map</h2>
+      <p class="section-intro">Every source file, one line each. Paths are links - click one to open the real file.</p>
+
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>File</th><th>Module</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><a href="src/index.ts" class="code-path">src/index.ts</a></td><td>-</td><td>GCP entry point. Registers the HTTP function <span class="mono">telegramBot</span>, caches one bootstrap promise per instance.</td></tr>
+            <tr><td><a href="src/main.ts" class="code-path">src/main.ts</a></td><td>-</td><td>Local-only Nest dev server (<span class="mono">npm run start:local</span>), not used in production.</td></tr>
+            <tr><td><a href="src/app.module.ts" class="code-path">src/app.module.ts</a></td><td>-</td><td>Root Nest module. Global <span class="mono">ConfigModule</span> (env vars) + Clock, Firestore, Reminders and Telegram modules.</td></tr>
+            <tr><td><a href="src/telegram/telegram.controller.ts" class="code-path">telegram/telegram.controller.ts</a></td><td>Telegram</td><td>POST / webhook, GET / health check, timing-safe secret-token comparison.</td></tr>
+            <tr><td><a href="src/telegram/telegram.service.ts" class="code-path">telegram/telegram.service.ts</a></td><td>Telegram</td><td>The whole branch table: allowlist, commands (incl. <span class="mono">/export</span>), voice, classification routing, reminder persistence, chunked replies.</td></tr>
+            <tr><td><a href="src/telegram/telegram.types.ts" class="code-path">telegram/telegram.types.ts</a></td><td>Telegram</td><td>The slice of Telegram's Update shape this bot actually reads.</td></tr>
+            <tr><td><a href="src/telegram/telegram.module.ts" class="code-path">telegram/telegram.module.ts</a></td><td>Telegram</td><td>Wires the controller + service, imports Transcription and Classifier modules.</td></tr>
+            <tr><td><a href="src/transcription/transcription.service.ts" class="code-path">transcription/transcription.service.ts</a></td><td>Transcription</td><td>Speech to text via Vertex AI. Named for the outcome, not the vendor - swapping models touches only this file.</td></tr>
+            <tr><td><a href="src/transcription/transcription.module.ts" class="code-path">transcription/transcription.module.ts</a></td><td>Transcription</td><td>Nest module wrapper, exports the service.</td></tr>
+            <tr><td><a href="src/classifier/classifier.service.ts" class="code-path">classifier/classifier.service.ts</a></td><td>Classifier</td><td>Structured-output classification via Vertex AI, date resolution against <span class="mono">now</span>, the <span class="mono">hasTimeOfDay</span> guard, plus every defensive parsing rule.</td></tr>
+            <tr><td><a href="src/classifier/classifier.types.ts" class="code-path">classifier/classifier.types.ts</a></td><td>Classifier</td><td>Intent union, draft shapes, confidence constants, the <span class="mono">now</span> context field.</td></tr>
+            <tr><td><a href="src/classifier/classifier.module.ts" class="code-path">classifier/classifier.module.ts</a></td><td>Classifier</td><td>Nest module wrapper, exports the service.</td></tr>
+            <tr><td><a href="src/clock/clock.service.ts" class="code-path">clock/clock.service.ts</a></td><td>Clock</td><td>The single source of "now": an <span class="mono">X-Test-Now</span> override pins it for deterministic date resolution, plus offset-aware local-time formatting (luxon).</td></tr>
+            <tr><td><a href="src/clock/clock.module.ts" class="code-path">clock/clock.module.ts</a></td><td>Clock</td><td>Nest module wrapper, exports the service.</td></tr>
+            <tr><td><a href="src/firestore/firestore.service.ts" class="code-path">firestore/firestore.service.ts</a></td><td>Firestore</td><td>Thin Firestore client. Reads <span class="mono">GCP_PROJECT</span> + <span class="mono">FIRESTORE_DATABASE</span>; degrades (<span class="mono">available=false</span>) when unset, like the model services.</td></tr>
+            <tr><td><a href="src/firestore/firestore.module.ts" class="code-path">firestore/firestore.module.ts</a></td><td>Firestore</td><td>Nest module wrapper, exports the service.</td></tr>
+            <tr><td><a href="src/reminders/reminders.service.ts" class="code-path">reminders/reminders.service.ts</a></td><td>Reminders</td><td>Persists and lists reminders at <span class="mono">users/{userId}/reminders/{autoId}</span> - the only writer so far.</td></tr>
+            <tr><td><a href="src/reminders/event-at.ts" class="code-path">reminders/event-at.ts</a></td><td>Reminders</td><td><span class="mono">normalizeEventAt</span> / <span class="mono">computeExpireAt</span>: validate <span class="mono">eventAt</span> to canonical offset form, reject past or offset-less times, derive the 24h TTL.</td></tr>
+            <tr><td><a href="src/reminders/reminders.module.ts" class="code-path">reminders/reminders.module.ts</a></td><td>Reminders</td><td>Nest module wrapper, imports Firestore, exports the service.</td></tr>
+            <tr><td><a href="test/telegram.service.spec.ts" class="code-path">test/telegram.service.spec.ts</a></td><td>Tests</td><td>Vitest unit tests for command routing (<span class="mono">/version</span>, <span class="mono">/help</span>, unknown commands).</td></tr>
+            <tr><td><a href="test/clock.service.spec.ts" class="code-path">test/clock.service.spec.ts</a></td><td>Tests</td><td>Vitest: the <span class="mono">X-Test-Now</span> override parses, and garbage falls through to the real clock.</td></tr>
+            <tr><td><a href="test/event-at.spec.ts" class="code-path">test/event-at.spec.ts</a></td><td>Tests</td><td>Vitest: <span class="mono">eventAt</span> normalisation, past / offset-less rejection, TTL maths.</td></tr>
+            <tr><td><a href="test/classifier.reminder.spec.ts" class="code-path">test/classifier.reminder.spec.ts</a></td><td>Tests</td><td>Vitest (model stubbed): the <span class="mono">hasTimeOfDay=false</span> path drops confidence below the ask threshold.</td></tr>
+            <tr><td><a href="cloudbuild.yaml" class="code-path">cloudbuild.yaml</a></td><td>Deploy</td><td>What the GitHub push trigger runs - the entire deploy pipeline lives in this one file.</td></tr>
+            <tr><td><a href="docs/architecture.md" class="code-path">docs/architecture.md</a></td><td>Docs</td><td>The full memory-layer plan: schema, retrieval design, build order, cost.</td></tr>
+            <tr><td><a href="docs/specs/README.md" class="code-path">docs/specs/README.md</a></td><td>Docs</td><td>The spec-driven delivery pipeline this repo builds features through.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p>A vitest suite <em>does</em> exist (<a href="test/telegram.service.spec.ts" class="code-path">test/telegram.service.spec.ts</a>, added while implementing spec <a href="docs/specs/0001-version.md" class="code-path">0001-version</a>). <a href="CLAUDE.md" class="code-path">CLAUDE.md</a>'s "no test framework configured" line predates it and is now stale for that one command path - everything else is still verified by curling the real function, per that same file.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="config">
+      <h2>Config &amp; Secrets</h2>
+      <p class="section-intro">Every setting is an environment variable - never a hardcoded value. Secrets ride through Secret Manager; everything else travels as plain deploy-time env vars so the real value is visible in <a href="cloudbuild.yaml" class="code-path">cloudbuild.yaml</a> rather than buried in a code default.</p>
+
+      <h3>Environment variables</h3>
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>Variable</th><th>Required</th><th>Production source</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">TELEGRAM_BOT_TOKEN</td><td><span class="badge badge-danger">required</span></td><td>Secret Manager</td><td>Constructor throws without it.</td></tr>
+            <tr><td class="mono">TELEGRAM_WEBHOOK_SECRET</td><td>optional</td><td>Secret Manager</td><td>Unset ⇒ secret-token check is skipped entirely.</td></tr>
+            <tr><td class="mono">ALLOWED_USERS</td><td>optional</td><td>Secret Manager</td><td>Comma-separated ids; through Secret Manager so its own commas don't collide with <span class="mono">--set-secrets</span>'s. Shared by prod and the test function.</td></tr>
+            <tr><td class="mono">GCP_PROJECT</td><td>optional</td><td><span class="mono">--set-env-vars</span></td><td>Unset ⇒ voice + classification disabled politely, text echo keeps working.</td></tr>
+            <tr><td class="mono">VERTEX_LOCATION</td><td>optional</td><td><span class="mono">--set-env-vars</span> = <span class="mono">global</span></td><td>"global" avoids the ~10% pinned-region surcharge.</td></tr>
+            <tr><td class="mono">TRANSCRIPTION_MODEL</td><td>optional</td><td><span class="mono">--set-env-vars</span></td><td>Default <span class="mono">gemini-3.5-flash-lite</span>.</td></tr>
+            <tr><td class="mono">CLASSIFIER_MODEL</td><td>optional</td><td><span class="mono">--set-env-vars</span></td><td>Same default; independently overridable.</td></tr>
+            <tr><td class="mono">DEFAULT_TIMEZONE</td><td>optional</td><td><span class="mono">--set-env-vars</span> = <span class="mono">Europe/Kyiv</span></td><td>Code default UTC. Invalid IANA name ⇒ warning, falls back to UTC.</td></tr>
+            <tr><td class="mono">MAX_VOICE_SECONDS</td><td>optional</td><td><span class="mono">--set-env-vars</span> = 300</td><td>Longer voice notes refused before download.</td></tr>
+            <tr><td class="mono">TEST_REFLECT_REPLY</td><td>test lane only</td><td>substitution <span class="mono">_REPLY_REFLECT</span></td><td><span class="mono">false</span> in prod, <span class="mono">true</span> on <span class="mono">testing</span> - replies come back in the HTTP response body.</td></tr>
+            <tr><td class="mono">FIRESTORE_DATABASE</td><td>optional</td><td>substitution <span class="mono">_FIRESTORE_DB</span></td><td>Which Firestore database reminders are stored in - now read by <a href="src/firestore/firestore.service.ts" class="code-path">FirestoreService</a>. Prod uses <span class="mono">(default)</span>, testing uses <span class="mono">test</span>, so the test lane never touches production data. Code default <span class="mono">(default)</span>.</td></tr>
+            <tr><td class="mono">PORT</td><td>local only</td><td>-</td><td>Nest dev server port.</td></tr>
+            <tr><td class="mono">GOOGLE_APPLICATION_CREDENTIALS</td><td>local only</td><td>-</td><td>Path to a service-account JSON key, only needed to transcribe from a laptop.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p><b><span class="mono">X-Test-Now</span> is a test-only request header, not an env var.</b> On the test function it pins "now" (an ISO 8601 value with offset, e.g. <span class="mono">2026-09-16T09:00:00+03:00</span>) for that one update, so relative-date resolution is deterministic in verification. It is honoured only when <span class="mono">TEST_REFLECT_REPLY</span> is <span class="mono">true</span> - the same trust boundary as reply reflection - and ignored entirely in production.</p>
+      </div>
+
+      <h3 style="margin-top:22px">IAM grants</h3>
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>Principal</th><th>Role</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">&lt;PROJECT_NUMBER&gt;-compute@developer.gserviceaccount.com</td><td>Secret Manager Secret Accessor</td><td>Read the 3 secrets at cold start.</td></tr>
+            <tr><td class="mono">&lt;PROJECT_NUMBER&gt;-compute@developer.gserviceaccount.com</td><td>Agent Platform User (<span class="mono">roles/aiplatform.user</span>)</td><td>Call Vertex AI - not to be confused with the legacy <span class="mono">roles/ml.*</span> "AI Platform" roles.</td></tr>
+            <tr><td class="mono">&lt;PROJECT_NUMBER&gt;-compute@developer.gserviceaccount.com</td><td>Cloud Datastore User (<span class="mono">roles/datastore.user</span>)</td><td>Read and write reminders in Firestore. One grant covers both the <span class="mono">(default)</span> and <span class="mono">test</span> databases.</td></tr>
+            <tr><td>same account, as the Cloud Build service account</td><td>Cloud Functions Developer, Cloud Run Admin, Service Account User, Artifact Registry Writer, Logs Writer</td><td>Deploy the function from inside the build container.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p><b>Firestore setup (Console, one-time).</b> Create two <b>Native</b>-mode databases in <span class="mono">europe-west1</span> (permanent, cannot be changed later): <span class="mono">(default)</span> for production and <span class="mono">test</span> for the isolated test function. On <b>each</b>, add a Time-to-live policy on collection group <span class="mono">reminders</span>, timestamp field <span class="mono">expireAt</span>, so an expired reminder is reaped roughly 24 hours after its event. The runtime compute service account needs <span class="mono">roles/datastore.user</span> (above).</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="deploy">
+      <h2>Deploy Pipeline</h2>
+      <p class="section-intro">One push, one build step, one always-on gen2 function. There is no separate CI step and no Docker build - the Google Node.js buildpack compiles TypeScript for you.</p>
+
+      <figure class="diagram-frame">
+        <svg viewBox="0 0 980 300" role="img" aria-label="A GitHub push to main triggers Cloud Build, which runs a single gcloud functions deploy step producing a stable Cloud Run URL; a separate testing branch trigger deploys an isolated test function used only by the spec-verifier agent.">
+          <rect class="box-live" x="30" y="90" width="150" height="60" rx="9"/>
+          <text class="box-title" x="105" y="125" text-anchor="middle">GitHub</text>
+          <line class="arrow" x1="180" y1="120" x2="238" y2="120" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="185" y="112">push → main</text>
+
+          <rect class="box-live" x="240" y="90" width="220" height="60" rx="9"/>
+          <text class="box-title" x="350" y="115" text-anchor="middle">Cloud Build</text>
+          <text class="box-sub" x="350" y="132" text-anchor="middle">1 step: cloud-sdk image</text>
+          <line class="arrow" x1="460" y1="120" x2="518" y2="120" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="463" y="105">gcloud functions deploy</text>
+          <text class="arrow-label" x="463" y="117">--gen2 --source=.</text>
+
+          <rect class="box-live" x="520" y="90" width="230" height="60" rx="9"/>
+          <text class="box-title" x="635" y="115" text-anchor="middle">telegram-echo-bot</text>
+          <text class="box-sub" x="635" y="132" text-anchor="middle">Cloud Run service (gen2), stable URL</text>
+          <line class="arrow" x1="750" y1="120" x2="808" y2="120" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="753" y="112">setWebhook</text>
+          <text class="arrow-label" x="753" y="124" style="font-size:9.5px">(one-time, browser)</text>
+
+          <rect class="box-live" x="810" y="90" width="140" height="60" rx="9"/>
+          <text class="box-title" x="880" y="115" text-anchor="middle">Telegram</text>
+          <text class="box-sub" x="880" y="132" text-anchor="middle">registered webhook</text>
+
+          <line class="arrow" x1="350" y1="150" x2="350" y2="188" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="358" y="175">branch: testing</text>
+
+          <rect class="box-test" x="240" y="190" width="220" height="60" rx="9"/>
+          <text class="box-title" x="350" y="215" text-anchor="middle">telegram-echo-bot-test</text>
+          <text class="box-sub" x="350" y="232" text-anchor="middle">isolated: own token/secret, reflect=true, test Firestore db</text>
+
+          <text class="box-sub" x="350" y="270" text-anchor="middle" style="fill:var(--ink-dim)">used only by spec-verifier, over HTTP, never touches production data</text>
+        </svg>
+        <figcaption>Same <a href="cloudbuild.yaml" class="code-path">cloudbuild.yaml</a>, two triggers: <span class="mono">^main$</span> deploys production, <span class="mono">testing</span> deploys a disposable isolated copy for the verifier agent.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="workflow">
+      <h2>Delivery Workflow</h2>
+      <p class="section-intro">Non-trivial changes go through a spec, not a direct edit. One agent implements, a <em>different</em> agent verifies against the live isolated test function - an agent grading its own work is biased toward "it works," so the check is a fresh pair of eyes. Once a spec is <span class="mono">READY</span>, <span class="mono">/implement-spec</span> runs the whole chain hands-off: build, verify, refresh this map, merge to <span class="mono">main</span>, and push - which deploys to production.</p>
+
+      <figure class="diagram-frame">
+        <svg viewBox="0 0 1040 300" role="img" aria-label="Spec lifecycle: DRAFT to READY to IN-PROGRESS to IMPLEMENTED to IN-TESTING to VERIFIED to DONE, with a NEEDS-REWORK loop back to IN-PROGRESS and a BLOCKED exit when the rework attempt cap is exceeded.">
+          <rect class="box-live" x="20" y="40" width="120" height="50" rx="8"/>
+          <text class="box-title" x="80" y="70" text-anchor="middle" style="font-size:11.5px">DRAFT</text>
+          <line class="arrow" x1="140" y1="65" x2="158" y2="65" marker-end="url(#m-arrow)"/>
+
+          <rect class="box-live" x="160" y="40" width="120" height="50" rx="8"/>
+          <text class="box-title" x="220" y="70" text-anchor="middle" style="font-size:11.5px">READY</text>
+          <line class="arrow" x1="280" y1="65" x2="298" y2="65" marker-end="url(#m-arrow)"/>
+
+          <rect class="box-live" x="300" y="40" width="140" height="50" rx="8"/>
+          <text class="box-title" x="370" y="70" text-anchor="middle" style="font-size:11.5px">IN-PROGRESS</text>
+          <line class="arrow" x1="440" y1="65" x2="458" y2="65" marker-end="url(#m-arrow)"/>
+
+          <rect class="box-live" x="460" y="40" width="140" height="50" rx="8"/>
+          <text class="box-title" x="530" y="70" text-anchor="middle" style="font-size:11.5px">IMPLEMENTED</text>
+          <line class="arrow" x1="600" y1="65" x2="618" y2="65" marker-end="url(#m-arrow)"/>
+
+          <rect class="box-live" x="620" y="40" width="130" height="50" rx="8"/>
+          <text class="box-title" x="685" y="70" text-anchor="middle" style="font-size:11.5px">IN-TESTING</text>
+          <line class="arrow" x1="750" y1="65" x2="768" y2="65" marker-end="url(#m-arrow)"/>
+
+          <rect class="box-live" x="770" y="40" width="120" height="50" rx="8"/>
+          <text class="box-title" x="830" y="70" text-anchor="middle" style="font-size:11.5px">VERIFIED</text>
+          <line class="arrow" x1="890" y1="65" x2="908" y2="65" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="893" y="55" style="font-size:9px">auto-merge</text>
+
+          <rect class="box-live" x="910" y="40" width="110" height="50" rx="8"/>
+          <text class="box-title" x="965" y="70" text-anchor="middle" style="font-size:11.5px">DONE</text>
+
+          <path class="arrow" d="M685,90 Q555,175 370,92" marker-end="url(#m-arrow)"/>
+          <text class="arrow-label" x="500" y="160" text-anchor="middle">NEEDS-REWORK (attempt++, testing reset to main)</text>
+
+          <path class="arrow-danger" d="M370,90 L370,150 L430,190" marker-end="url(#m-arrow-danger)"/>
+          <path class="arrow-danger" d="M685,90 L685,150 L560,190" marker-end="url(#m-arrow-danger)"/>
+          <rect class="box-danger" x="440" y="200" width="180" height="50" rx="8"/>
+          <text class="box-title" x="530" y="222" text-anchor="middle" style="fill:var(--danger); font-size:11.5px">BLOCKED</text>
+          <text class="box-sub" x="530" y="238" text-anchor="middle">attempt &gt; max_attempts</text>
+        </svg>
+        <figcaption>The <span class="mono">testing</span> branch is disposable scaffolding, force-reset to <span class="mono">main</span> whenever no spec occupies it. Neither <em>worker agent</em> writes <span class="mono">main</span>; the <span class="mono">/implement-spec</span> orchestrator merges and pushes it automatically once a spec is <span class="mono">VERIFIED</span>.</figcaption>
+      </figure>
+
+      <div class="card-grid">
+        <div class="card"><h4>spec-implementer <span class="badge badge-live">agent</span></h4><p>Claims a READY spec, builds on <span class="mono">feat/&lt;id&gt;</span>, gets build + lint + unit tests green.</p></div>
+        <div class="card"><h4>spec-verifier <span class="badge badge-live">agent</span></h4><p>Force-pushes the feature branch onto <span class="mono">testing</span>, drives the deployed test function over HTTP, runs a security pass, never patches failures.</p></div>
+        <div class="card"><h4>implement-spec <span class="badge badge-live">skill</span></h4><p><span class="mono">/implement-spec &lt;id&gt;</span> is the autonomous orchestrator: it loops the implementer and verifier (auto-rework to <span class="mono">max_attempts</span>), then on <span class="mono">VERIFIED</span> refreshes this map, merges <span class="mono">feat/&lt;id&gt;</span> to <span class="mono">main</span>, and pushes - the only thing here that writes <span class="mono">main</span>. <span class="mono">/verify-spec</span> is the standalone verify-only stage.</p></div>
+        <div class="card"><h4>.testing-lock</h4><p>One test function exists, so one spec occupies it at a time; a verifier finding it held waits rather than colliding.</p></div>
+      </div>
+
+      <h3 style="margin-top:22px">Specs in flight</h3>
+      <p class="section-intro">State comes straight from each spec's frontmatter in <a href="docs/specs/README.md" class="code-path">docs/specs/</a>. A colour here is build status, not the confidence ladder above: teal = built, amber = written but not built yet.</p>
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>Spec</th><th>State</th><th>What it delivers</th></tr></thead>
+          <tbody>
+            <tr><td><a href="docs/specs/0001-version.md" class="code-path">0001-version</a></td><td><span class="badge badge-live">DONE</span></td><td>The <span class="mono">/version</span> command and the first vitest suite.</td></tr>
+            <tr><td><a href="docs/specs/0002-reminders-capture.md" class="code-path">0002-reminders-capture</a></td><td><span class="badge badge-live">VERIFIED</span></td><td>Reminder capture, resolve and store - this repo's first persistence (the change reflected across this page).</td></tr>
+            <tr><td><a href="docs/specs/0003-reminder-delivery.md" class="code-path">0003-reminder-delivery</a></td><td><span class="badge badge-planned">READY</span></td><td>The Scheduler <span class="mono">/sweep</span>, delivery, and snooze / ack callbacks.</td></tr>
+            <tr><td><a href="docs/specs/0004-multiple-notify-times.md" class="code-path">0004-multiple-notify-times</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>More than one notification per reminder, delivered independently.</td></tr>
+            <tr><td><a href="docs/specs/0005-recurring-reminders.md" class="code-path">0005-recurring-reminders</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>Repeating reminders (yearly / weekly), DST-correct per occurrence.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="planned" class="planned">
+      <h2>Planned: Memory Layer <span class="badge badge-live">reminders live</span> <span class="badge badge-planned">the rest planned</span></h2>
+      <p class="section-intro">The bot stops replying and starts remembering. Every message becomes an immutable record before any model looks at it - interpretation can be wrong and re-run later; the words themselves never are. Full reasoning: <a href="docs/architecture.md" class="code-path">docs/architecture.md</a>.</p>
+
+      <div class="callout">
+        <p><b>The one rule:</b> capture is sacred, interpretation is disposable. A model that misreads "remind me about the dentist" still leaves the original words intact - you lose a reminder, not a memory.</p>
+      </div>
+
+      <h3>The planned 8-step pipeline</h3>
+      <figure class="diagram-frame planned">
+        <svg viewBox="0 0 1060 130" role="img" aria-label="Planned pipeline: receive, gate, normalize, capture, resolve pending, classify and extract, act, confirm - capture happens before classification, so a model failure never loses the original message.">
+          <!-- 8 pills -->
+          <g>
+            <rect class="box-planned" x="10" y="35" width="118" height="55" rx="8"/><text class="box-sub" x="69" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">1 Receive</text><text class="box-sub" x="69" y="74" text-anchor="middle" style="font-size:9.5px">always 200</text>
+          </g>
+          <line class="arrow-planned" x1="128" y1="62" x2="146" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="148" y="35" width="118" height="55" rx="8"/><text class="box-sub" x="207" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">2 Gate</text><text class="box-sub" x="207" y="74" text-anchor="middle" style="font-size:9.5px">ALLOWED_USERS</text>
+          </g>
+          <line class="arrow-planned" x1="266" y1="62" x2="284" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="286" y="35" width="118" height="55" rx="8"/><text class="box-sub" x="345" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">3 Normalize</text><text class="box-sub" x="345" y="74" text-anchor="middle" style="font-size:9.5px">voice → transcript</text>
+          </g>
+          <line class="arrow-planned" x1="404" y1="62" x2="422" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="424" y="35" width="118" height="55" rx="8"/><text class="box-sub" x="483" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">4 Capture</text><text class="box-sub" x="483" y="74" text-anchor="middle" style="font-size:9.5px">keyed on update_id</text>
+          </g>
+          <line class="arrow-planned" x1="542" y1="62" x2="560" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="562" y="35" width="118" height="55" rx="8"/><text class="box-sub" x="621" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">5 Resolve</text><text class="box-sub" x="621" y="74" text-anchor="middle" style="font-size:9.5px">pending answer?</text>
+          </g>
+          <line class="arrow-planned" x1="680" y1="62" x2="698" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="700" y="35" width="118" height="55" rx="8"/><text class="box-sub" x="759" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">6 Classify</text><text class="box-sub" x="759" y="74" text-anchor="middle" style="font-size:9.5px">extract fields</text>
+          </g>
+          <line class="arrow-planned" x1="818" y1="62" x2="836" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="838" y="35" width="98" height="55" rx="8"/><text class="box-sub" x="887" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">7 Act</text><text class="box-sub" x="887" y="74" text-anchor="middle" style="font-size:9.5px">write projection</text>
+          </g>
+          <line class="arrow-planned" x1="936" y1="62" x2="954" y2="62" marker-end="url(#m-arrow-planned)"/>
+          <g>
+            <rect class="box-planned" x="956" y="35" width="98" height="55" rx="8"/><text class="box-sub" x="1005" y="58" text-anchor="middle" style="fill:var(--ink); font-weight:600">8 Confirm</text><text class="box-sub" x="1005" y="74" text-anchor="middle" style="font-size:9.5px">reply + button</text>
+          </g>
+        </svg>
+        <figcaption>Capture (step 4) comes before classification (step 6) - if every later step fails, the user's own words are already saved.</figcaption>
+      </figure>
+
+      <h3 style="margin-top:26px">Data model (Firestore) - reminders live, the rest planned</h3>
+      <div class="card-grid">
+        <details class="schema-card planned">
+          <summary>users/{telegramUserId} <span class="mono">root</span></summary>
+          <table>
+            <tr><td class="mono">timezone</td><td>IANA name, e.g. <span class="mono">Europe/Kyiv</span> - not optional, every relative date depends on it</td></tr>
+            <tr><td class="mono">locale, prefs</td><td>Reply language, how chatty confirmations should be</td></tr>
+          </table>
+        </details>
+        <details class="schema-card planned">
+          <summary>entries/{updateId} <span class="mono">the capture log</span></summary>
+          <table>
+            <tr><td class="mono">doc id</td><td>Telegram's <span class="mono">update_id</span> - makes the whole pipeline safe to re-run</td></tr>
+            <tr><td class="mono">text, source</td><td>The transcript or message; <span class="mono">text | voice | photo</span></td></tr>
+            <tr><td class="mono">intents[], extraction</td><td>Derived, array not single value; raw model output kept verbatim for backfill</td></tr>
+            <tr><td class="mono">mentions[], actorIds[], keywords[]</td><td>Raw surface forms, resolved links, hybrid-retrieval terms</td></tr>
+            <tr><td class="mono">ym</td><td>"2026-08" - equality bucket, since vector pre-filters can't do date ranges</td></tr>
+            <tr><td class="mono">embedding, embeddingModel</td><td>768-dim vector (truncated + renormalized), and which model produced it</td></tr>
+          </table>
+        </details>
+        <details class="schema-card">
+          <summary>users/{userId}/reminders/{autoId} <span class="badge badge-live">live</span> <span class="mono">projection</span></summary>
+          <table>
+            <tr><td class="mono">userId, chatId</td><td>Owner and chat, so delivery later knows who and where</td></tr>
+            <tr><td class="mono">originalText</td><td>The message exactly as sent - sacred capture, kept even if the interpretation is wrong</td></tr>
+            <tr><td class="mono">title, eventAt</td><td>What, and when the event happens; <span class="mono">eventAt</span> is local ISO 8601 with the user's offset</td></tr>
+            <tr><td class="mono">eventAtUtc, remindAt</td><td>The event as a UTC Timestamp; <span class="mono">remindAt</span> starts equal to it, kept separate so a later snooze moves the notification, not the event</td></tr>
+            <tr><td class="mono">createdAt</td><td>When it was captured (the same "now" the classifier resolved against)</td></tr>
+            <tr><td class="mono">expireAt</td><td>TTL target: <span class="mono">eventAt</span> + 24h, so a stored reminder is reaped after it passes</td></tr>
+            <tr><td class="mono">status</td><td><span class="mono">'scheduled'</span> at creation; <span class="mono">sent</span> / <span class="mono">acked</span> arrive with delivery (spec 0003)</td></tr>
+          </table>
+        </details>
+        <details class="schema-card planned">
+          <summary>symptoms/{id} <span class="mono">projection</span></summary>
+          <table>
+            <tr><td class="mono">type</td><td>Normalized slug, e.g. <span class="mono">headache</span> - what makes "how often" possible</td></tr>
+            <tr><td class="mono">severity</td><td>1-10, <b>null when not stated</b> - never inferred from words like "bad"</td></tr>
+            <tr><td class="mono">startedAt, durationMinutes, notes</td><td>Where stated, in the user's own words</td></tr>
+          </table>
+        </details>
+        <details class="schema-card planned">
+          <summary>actors/{id} <span class="mono">projection</span></summary>
+          <table>
+            <tr><td class="mono">name, relation, aliases[]</td><td>Every form actually used - <span class="mono">["wife","Olena","she"]</span></td></tr>
+            <tr><td class="mono">declinedForms[]</td><td>Mentions confirmed as not a person, so it never asks twice</td></tr>
+          </table>
+        </details>
+        <details class="schema-card planned">
+          <summary>pending/{chatId} <span class="mono">scratch state</span></summary>
+          <table>
+            <tr><td class="mono">draft, question, options</td><td>The partly-extracted reminder/actor, and the valid button answers</td></tr>
+            <tr><td class="mono">expiresAt</td><td>Firestore TTL policy - an abandoned question cleans itself up, no sweeper needed</td></tr>
+          </table>
+        </details>
+      </div>
+
+      <h3 style="margin-top:26px">Build order</h3>
+      <div class="stepper">
+        <div class="step-row">
+          <div class="step-rail"><div class="step-dot">0</div><div class="step-line"></div></div>
+          <div class="step-body"><h4>Persistence &amp; capture</h4><p>Firestore, entries keyed on <span class="mono">update_id</span>, a user timezone. No intelligence at all.</p><p class="why"><b>Why first:</b> de-risks everything above it - and it's the phase where sacred-capture either gets built in or gets lost.</p></div>
+        </div>
+        <div class="step-row">
+          <div class="step-rail"><div class="step-dot">1</div><div class="step-line"></div></div>
+          <div class="step-body"><h4>Classifier &amp; confirmations</h4><p>The intent array, the "other" ladder, visible confirmations, corrections, a fixture test of ~30 real messages.</p><p class="why"><b>Shipped out of order, on request:</b> the classifier and per-intent branching already exist today, built before phase 0 so routing could be judged against real messages first. Persistence, correction, question, and inline keyboards still wait on phase 0.</p></div>
+        </div>
+        <div class="step-row">
+          <div class="step-rail"><div class="step-dot">2</div><div class="step-line"></div></div>
+          <div class="step-body"><h4>Reminders</h4><p>Capture and store first (resolve a time, write the record), then the Scheduler sweeper, delivery, snooze / ack buttons, multiple notify times and recurrence.</p><p class="why"><b>Capture shipped (spec 0002):</b> reminders now resolve to a concrete instant and persist to Firestore. Delivery (spec 0003), multiple notify times (0004) and recurrence (0005) are the remaining parts. First feature needing both stored state and a clock.</p></div>
+        </div>
+        <div class="step-row">
+          <div class="step-rail"><div class="step-dot">3</div><div class="step-line"></div></div>
+          <div class="step-body"><h4>Symptoms</h4><p>Normalized vocabulary, plus a doctor-visit summary view.</p><p class="why"><b>Why here:</b> reuses the classify-confirm-store path from phase 2, no new infrastructure.</p></div>
+        </div>
+        <div class="step-row">
+          <div class="step-rail"><div class="step-dot">4</div><div class="step-line"></div></div>
+          <div class="step-body"><h4>Recall</h4><p>Structured queries first, then embeddings, the vector index, and hybrid keyword retrieval.</p><p class="why"><b>Why here:</b> semantic search over an empty corpus proves nothing - by now there's real data.</p></div>
+        </div>
+        <div class="step-row">
+          <div class="step-rail"><div class="step-dot">5</div></div>
+          <div class="step-body"><h4>Actors</h4><p>Detection, the ask, aliases, then a backfill pass over existing entries.</p><p class="why"><b>Why last:</b> the only feature that improves by arriving late - it can retro-label months of history in one pass.</p></div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:22px">Why Firestore, not the obvious alternative</h3>
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>Option</th><th>Verdict</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">Firestore findNearest</td><td><span class="badge badge-live">use this</span></td><td>Vectors are just a field on the entry already stored - no second service, covered by the same free tier.</td></tr>
+            <tr><td class="mono">Vertex AI Vector Search</td><td>avoid</td><td>Billed per node-hour regardless of traffic - the cheapest node is ~$56/mo idle, ~56× this bot's entire projected bill.</td></tr>
+            <tr><td class="mono">Cloud SQL / AlloyDB + pgvector</td><td>no</td><td>Better aggregation, but ~$10-25/mo minimum plus VPC plumbing to reach from a function.</td></tr>
+            <tr><td class="mono">Brute-force scan in the function</td><td>fallback only</td><td>7,300 reads per question versus ~83 for <span class="mono">findNearest</span> - more expensive, not less.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="tooling">
+      <h2>Tooling Inventory</h2>
+      <p class="section-intro">Everything this system leans on, split into what runs the bot and what builds the bot.</p>
+
+      <h3>Runtime &amp; cloud</h3>
+      <div class="card-grid">
+        <div class="card"><h4>Cloud Functions (gen2) / Cloud Run <span class="badge badge-live">live</span></h4><p>The bot itself - a gen2 function is a Cloud Run service under the hood; 256Mi memory, 120s timeout, max 10 instances.</p></div>
+        <div class="card"><h4>Cloud Build <span class="badge badge-live">live</span></h4><p>Runs <span class="mono">cloudbuild.yaml</span> on every push; the only place <span class="mono">gcloud</span> executes.</p></div>
+        <div class="card"><h4>Secret Manager <span class="badge badge-live">live</span></h4><p>Holds the bot token, webhook secret, and allowlist - nothing sensitive in source or in <span class="mono">--set-env-vars</span>.</p></div>
+        <div class="card"><h4>Vertex AI - Gemini 3.5 Flash Lite <span class="badge badge-live">live</span></h4><p>Transcription and classification, authenticated as the function's own service account - no API key anywhere.</p></div>
+        <div class="card"><h4>Firestore <span class="badge badge-live">live</span></h4><p>Native mode, <span class="mono">europe-west1</span> - now storing reminders, the memory layer's first collection; the entries log and other projections are still planned. Chosen once and permanent.</p></div>
+        <div class="card planned"><h4>Cloud Scheduler <span class="badge badge-planned">planned</span></h4><p>One cron job, ~1/min, wakes the function to sweep due reminders.</p></div>
+        <div class="card planned"><h4>Vertex embeddings <span class="badge badge-planned">planned</span></h4><p><span class="mono">gemini-embedding-001</span>, 768 dimensions, same auth as transcription - topic recall for free-text questions.</p></div>
+      </div>
+
+      <h3 style="margin-top:22px">Delivery tooling (Claude Code, this repo)</h3>
+      <div class="card-grid">
+        <div class="card"><h4>spec-implementer / spec-verifier <span class="badge badge-live">agents</span></h4><p>Defined in <a href=".claude/agents/spec-implementer/AGENT.md" class="code-path">.claude/agents/</a> - build and independently verify one spec each.</p></div>
+        <div class="card"><h4>implement-spec / verify-spec <span class="badge badge-live">skills</span></h4><p><a href=".claude/skills/implement-spec/SKILL.md" class="code-path">.claude/skills/</a> - the commands that hand a spec to the matching agent.</p></div>
+        <div class="card"><h4>update-architecture-docs <span class="badge badge-live">skill</span></h4><p>Regenerates this page from the current source tree - see <a href=".claude/skills/update-architecture-docs/SKILL.md" class="code-path">.claude/skills/update-architecture-docs/SKILL.md</a>.</p></div>
+        <div class="card"><h4>gcloud-guard.sh <span class="badge badge-live">hook</span></h4><p><a href=".claude/hooks/gcloud-guard.sh" class="code-path">.claude/hooks/gcloud-guard.sh</a> - blocks any gcloud/gsutil/bq command that doesn't match the pinned project + account.</p></div>
+      </div>
+
+      <h3 style="margin-top:22px">Key dependencies</h3>
+      <div class="table-frame">
+        <table>
+          <thead><tr><th>Package</th><th>Used for</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">@nestjs/core, common, config, platform-express</td><td>The application framework - one controller, three injectable services.</td></tr>
+            <tr><td class="mono">@google-cloud/functions-framework</td><td>Runs the compiled function locally exactly as GCP would invoke it.</td></tr>
+            <tr><td class="mono">@google/genai</td><td>Vertex AI client - transcription, classification, and (planned) embeddings all go through this one SDK.</td></tr>
+            <tr><td class="mono">axios</td><td>Telegram Bot API calls: sendMessage, getFile, file download.</td></tr>
+            <tr><td class="mono">@google-cloud/firestore</td><td>Firestore client for reminder storage at <span class="mono">users/{userId}/reminders/{autoId}</span>.</td></tr>
+            <tr><td class="mono">luxon</td><td>Date and time maths: resolving relative dates, offset-aware formatting, the 24h TTL (with <span class="mono">@types/luxon</span>).</td></tr>
+            <tr><td class="mono">express</td><td>Underlying HTTP server Nest sits on; deliberately Express 5 despite the framework's Express 4 typings.</td></tr>
+            <tr><td class="mono">vitest</td><td>Unit tests for deterministic command routing (added with spec 0001-version).</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>Generated 2026-09-17 from commit <span class="mono">77135a1</span> on <span class="mono">main</span>. Source of truth is always the repo, not this page - regenerate after any real architectural change with <span class="mono">/update-architecture-docs</span>.</p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var toggle = document.getElementById('hide-planned-toggle');
+    if (toggle) {
+      toggle.addEventListener('change', function () {
+        document.body.classList.toggle('hide-planned', toggle.checked);
+      });
+    }
+
+    var links = Array.prototype.slice.call(document.querySelectorAll('.nav-link'));
+    var sections = links
+      .map(function (a) { return document.querySelector(a.getAttribute('href')); })
+      .filter(Boolean);
+
+    if ('IntersectionObserver' in window && sections.length) {
+      var byId = {};
+      links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          var link = byId[entry.target.id];
+          if (!link) return;
+          if (entry.isIntersecting) {
+            links.forEach(function (a) { a.classList.remove('active'); });
+            link.classList.add('active');
+          }
+        });
+      }, { rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+
+      sections.forEach(function (s) { observer.observe(s); });
+    }
+  })();
+</script>
+</body>
+</html>

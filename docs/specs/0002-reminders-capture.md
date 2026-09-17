@@ -1,6 +1,6 @@
 ---
 id: 0002-reminders-capture
-state: IN-TESTING
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0002-reminders-capture

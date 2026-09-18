@@ -65,16 +65,16 @@ steps:
             --location=${_REGION} \
             --schedule="*/30 * * * *" \
             --time-zone="Europe/Kyiv" \
-            --uri="${FUNCTION_URL}/sweep" \
-            --update-headers="X-Sweep-Secret=${SWEEP_SECRET_VALUE}"
+            --uri="$${FUNCTION_URL}/sweep" \
+            --update-headers="X-Sweep-Secret=$${SWEEP_SECRET_VALUE}"
         else
           gcloud scheduler jobs create http ${_SWEEP_JOB_NAME} \
             --location=${_REGION} \
             --schedule="*/30 * * * *" \
             --time-zone="Europe/Kyiv" \
-            --uri="${FUNCTION_URL}/sweep" \
+            --uri="$${FUNCTION_URL}/sweep" \
             --http-method=POST \
-            --headers="X-Sweep-Secret=${SWEEP_SECRET_VALUE}"
+            --headers="X-Sweep-Secret=$${SWEEP_SECRET_VALUE}"
         fi
 
 availableSecrets:

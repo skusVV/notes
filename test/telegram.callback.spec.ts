@@ -24,12 +24,12 @@ const NOTIFICATION_REF = { id: NOTIFICATION_ID } as never;
  * A reminders stub whose lookup only ever finds OWNER's notification, like the real user-scoped
  * path does, and which hands back the document reference the button branches act on.
  */
-function fakeReminders() {
+function fakeReminders(recurring = false) {
   return {
     available: true,
     getOwnedNotification: vi.fn(async (userId: number, id: string) =>
       userId === OWNER && id === NOTIFICATION_ID
-        ? { id, ref: NOTIFICATION_REF, userId, status: 'sent' }
+        ? { id, ref: NOTIFICATION_REF, userId, status: 'sent', recurring }
         : undefined,
     ),
     ackNotification: vi.fn().mockResolvedValue(undefined),
@@ -145,8 +145,27 @@ describe('TelegramService callback handling', () => {
       OWNER,
       new Date('2026-09-21T20:05:00+03:00'),
       '2026-09-21T20:05:00+03:00',
+      false,
     );
     expect(reminders.ackNotification).not.toHaveBeenCalled();
+  });
+
+  // A snooze on a recurring reminder's occurrence must not hand it a TTL field: the last argument
+  // is what keeps a recurring notification exempt from the expireAt policy. The recurrence itself
+  // is untouched - the following occurrence is already scheduled.
+  it('tells the store not to add an expiry when the notification is recurring', async () => {
+    const recurring = fakeReminders(true);
+    const service = makeService(recurring);
+
+    await service.handleUpdate(tap('1h', OWNER), [], '2027-06-12T09:05:00+03:00');
+
+    expect(recurring.snoozeNotification).toHaveBeenCalledWith(
+      NOTIFICATION_REF,
+      OWNER,
+      new Date('2027-06-12T10:05:00+03:00'),
+      '2027-06-12T10:05:00+03:00',
+      true,
+    );
   });
 
   // acceptance: snooze-moves-only-that-notification - next calendar day at 09:00 local
@@ -160,6 +179,7 @@ describe('TelegramService callback handling', () => {
       OWNER,
       new Date('2026-09-17T09:00:00+03:00'),
       '2026-09-17T09:00:00+03:00',
+      false,
     );
   });
 

@@ -5,6 +5,12 @@ import { DateTime } from 'luxon';
 import { normalizeEventAt } from '../reminders/event-at';
 import { EVENING_HOUR, MORNING_HOUR, RELATIVE_NOTIFY } from '../reminders/notify-times';
 import {
+  DEFAULT_RECURRENCE_HOUR,
+  RECURRENCE_FREQ,
+  WEEKDAYS,
+  normalizeRecurrence,
+} from '../reminders/recurrence';
+import {
   Classification,
   ClassificationResult,
   ClassifierContext,
@@ -103,8 +109,46 @@ const RESPONSE_SCHEMA: Schema = {
                   'how far ahead. Do not guess a default - the bot asks.',
               },
               recurrence: {
-                type: Type.STRING,
-                description: 'Plain description if it repeats, e.g. "every day at 09:00".',
+                type: Type.OBJECT,
+                description:
+                  'The repeat rule, ONLY when the message explicitly says this repeats (a ' +
+                  'birthday or anniversary date, "every Monday", "every year on...", "on the 1st ' +
+                  'of each month", "every day"). OMIT this object entirely for a one-off. Never ' +
+                  'add a recurrence because a message sounds routine - a repeat the user did not ' +
+                  'ask for fires forever. When a recurrence is present, OMIT eventAt: the bot ' +
+                  'computes each occurrence from the rule itself.',
+                properties: {
+                  freq: { type: Type.STRING, format: 'enum', enum: [...RECURRENCE_FREQ] },
+                  month: {
+                    type: Type.INTEGER,
+                    minimum: 1,
+                    maximum: 12,
+                    description: 'Month 1-12. Required for freq=yearly, omit otherwise.',
+                  },
+                  day: {
+                    type: Type.INTEGER,
+                    minimum: 1,
+                    maximum: 31,
+                    description:
+                      'Day of the month 1-31. Required for freq=monthly and freq=yearly, omit ' +
+                      'otherwise.',
+                  },
+                  weekday: {
+                    type: Type.STRING,
+                    format: 'enum',
+                    enum: [...WEEKDAYS],
+                    description: 'Required for freq=weekly, omit otherwise.',
+                  },
+                  atLocal: {
+                    type: Type.STRING,
+                    description:
+                      'The stated local clock time as "HH:mm", 24-hour. OMIT when the message ' +
+                      `named no time - the bot then uses ${DEFAULT_RECURRENCE_HOUR}:00 local. Do ` +
+                      'not invent an hour.',
+                  },
+                },
+                required: ['freq'],
+                propertyOrdering: ['freq', 'month', 'day', 'weekday', 'atLocal'],
               },
             },
             required: ['title', 'hasTimeOfDay'],
@@ -182,7 +226,8 @@ const INTENT_GUIDE = [
   'reminder - something to be reminded about later. Needs a time or the bot will ask.',
   'symptom - a health event the user or someone they name is experiencing.',
   'question - asking to read back their own history. Never answer it; just classify it.',
-  'actor_info - a fact about a person ("my wife\'s birthday is in May"). Not a note.',
+  'actor_info - a fact about a person ("my wife is allergic to penicillin"). Not a note. But a',
+  '  recurring DATE about a person (a birthday, an anniversary) is a reminder - see Repeats below.',
   'correction - fixing or deleting what they just said ("no, that was 3pm"). Needs the previous',
   '  message to make sense, which is given below when there is one.',
   'other - genuinely none of the above, or you are not sure enough to pick. Not an error.',
@@ -259,7 +304,12 @@ export class ClassifierService {
       },
     });
 
-    return this.parse(response.text, text, this.resolveNow(context.now));
+    return this.parse(
+      response.text,
+      text,
+      this.resolveNow(context.now),
+      context.timezone || this.defaultTimezone,
+    );
   }
 
   /** The instant relative reminders are validated against, from the context's local-ISO "now". */
@@ -308,6 +358,25 @@ export class ClassifierService {
       '- "doctor on the 22nd at 2PM, remind me the evening before and the morning of" ->',
       '  eventAt = the 22nd 14:00 local, notifyAt = ["evening_before", "morning_of"].',
       '- "remind me on the 25th at 12 to pay rent" -> eventAt = the 25th 12:00 local, notifyAt omitted.',
+      '',
+      'Repeats (recurrence). Emit the recurrence object ONLY when the message itself says the thing',
+      'repeats. Rules:',
+      '- A birthday or an anniversary IS a repeat: intent=reminder with freq=yearly on that month',
+      '  and day, and a title naming whose it is. Do NOT file it as actor_info - there are no person',
+      '  records yet, so it would be lost.',
+      '- "every Monday" -> freq=weekly, weekday=monday. "on the 1st of each month" -> freq=monthly,',
+      '  day=1. "every year on December 25" -> freq=yearly, month=12, day=25. "every morning" ->',
+      '  freq=daily.',
+      '- With a recurrence, OMIT eventAt and set hasTimeOfDay from the words as usual. The bot',
+      `  resolves each occurrence itself and uses ${DEFAULT_RECURRENCE_HOUR}:00 local when no time`,
+      '  was stated, so there is no hour to guess.',
+      '- A one-off stays a one-off. "remind me on Monday at 8" is NOT weekly. Nothing about a',
+      '  routine-sounding message makes it a repeat - only explicit repeating words do.',
+      'Examples:',
+      '- "Bob has a birthday on June 12" -> reminder, title "Bob\'s birthday",',
+      '  recurrence = {freq: yearly, month: 6, day: 12}, no eventAt, no atLocal.',
+      '- "Take out the trash every Monday at 8am" -> recurrence = {freq: weekly, weekday: monday,',
+      '  atLocal: "08:00"}, no eventAt.',
       '',
       'Rules that matter more than being helpful:',
       '- Omit any field the user did not actually state. An absent value is correct; a guessed',
@@ -362,7 +431,12 @@ export class ClassifierService {
    * invents an intent must not crash the webhook. Anything unusable becomes `other`, which the
    * router already knows how to handle.
    */
-  private parse(raw: string | undefined, original: string, now: Date): ClassificationResult {
+  private parse(
+    raw: string | undefined,
+    original: string,
+    now: Date,
+    timezone: string,
+  ): ClassificationResult {
     const body = raw?.trim();
     if (!body) {
       this.logger.warn('Classifier returned an empty body');
@@ -380,7 +454,7 @@ export class ClassifierService {
     const root = parsed as Record<string, unknown> | null;
     const rawItems = Array.isArray(root?.items) ? root.items : [];
     const items = rawItems
-      .map((item) => this.coerceItem(item, now))
+      .map((item) => this.coerceItem(item, now, timezone))
       .filter((item): item is Classification => item !== undefined);
 
     if (items.length === 0) {
@@ -396,7 +470,7 @@ export class ClassifierService {
     };
   }
 
-  private coerceItem(value: unknown, now: Date): Classification | undefined {
+  private coerceItem(value: unknown, now: Date, timezone: string): Classification | undefined {
     const raw = value as Record<string, unknown> | null;
     if (!raw || typeof raw.intent !== 'string') {
       return undefined;
@@ -426,7 +500,10 @@ export class ClassifierService {
         // "named no notify time", and the store resolves the latter to one nudge at eventAt.
         notifyAt: notifyAt.length > 0 ? notifyAt : undefined,
         leadMinutes: optionalInt(reminder.leadMinutes),
-        recurrence: optionalString(reminder.recurrence),
+        // A rule the resolver cannot compute occurrences for is dropped, not repaired: half a
+        // recurrence ("weekly", no weekday) would have to be invented to be usable, and an
+        // invented repeat fires forever at a time the user never named.
+        recurrence: normalizeRecurrence(reminder.recurrence, timezone),
       };
     }
 
@@ -463,10 +540,16 @@ export class ClassifierService {
     // stated an explicit clock time. A model that copies the hour from "now" still produces a
     // valid-looking instant, which normalizeEventAt cannot catch - so a reminder whose time of day
     // was not actually stated is treated as unresolved even when eventAt parses.
+    //
+    // A valid recurrence is the one exception: it resolves its own occurrences from a wall-clock
+    // rule, so a birthday ("on June 12", no clock time, no eventAt) is fully actionable and the
+    // default 09:00 is the spec's fixed value rather than a guess by the model.
     const hasTimeOfDay = reminder?.hasTimeOfDay === true;
     const reminderUnresolved =
       intent === 'reminder' &&
-      (!item.reminder || !hasTimeOfDay || !normalizeEventAt(item.reminder.eventAt, now));
+      (!item.reminder ||
+        (!item.reminder.recurrence &&
+          (!hasTimeOfDay || !normalizeEventAt(item.reminder.eventAt, now))));
     const needsPayload = reminderUnresolved || (intent === 'symptom' && !item.symptom);
     if (needsPayload) {
       this.logger.warn(`Classifier returned ${intent} without a usable payload`);

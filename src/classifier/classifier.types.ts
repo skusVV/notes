@@ -15,6 +15,8 @@ export const INTENTS = [
 
 export type Intent = (typeof INTENTS)[number];
 
+import { Recurrence } from '../reminders/recurrence';
+
 /** How a question should be answered. Conflating these is the classic retrieval mistake. */
 export const QUESTION_SHAPES = ['structured', 'semantic', 'mixed'] as const;
 export type QuestionShape = (typeof QUESTION_SHAPES)[number];
@@ -32,7 +34,12 @@ export interface ReminderDraft {
   notifyAt?: string[];
   /** Absent means the user did not say - the bot has to ask rather than guess. */
   leadMinutes?: number;
-  recurrence?: string;
+  /**
+   * A structured repeat rule, present **only** when the message explicitly said it repeats. A
+   * recurring reminder needs no `eventAt`: each occurrence is computed from this rule instead, so
+   * this being present is what makes a birthday ("on June 12", no clock time) storable.
+   */
+  recurrence?: Recurrence;
 }
 
 export interface SymptomDraft {

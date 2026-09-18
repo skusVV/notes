@@ -83,6 +83,9 @@ export class SweeperService {
    * The unit of work is the notification, not the reminder: one appointment with an evening-before
    * and a morning-of nudge is delivered by two separate ticks, each claiming its own document.
    *
+   * A recurring reminder rides the same machinery and adds one step: once its single occurrence has
+   * been claimed, the tick arms the following one. That is the whole of recurrence at delivery time.
+   *
    * Returns the number of deliveries sent. Never throws: one bad document must not abort the rest.
    */
   async sweep(now: Date, sink?: string[]): Promise<number> {
@@ -108,8 +111,9 @@ export class SweeperService {
 
     let sent = 0;
     for (const notification of due) {
+      let claimed = false;
       try {
-        const claimed = await this.reminders.claimForSend(notification.ref, now);
+        claimed = await this.reminders.claimForSend(notification.ref, now);
         if (!claimed) {
           // Another tick won the race, or a button already moved it. Not an error.
           this.logger.log(`Skipped notification ${notification.id}: no longer scheduled`);
@@ -121,6 +125,25 @@ export class SweeperService {
       } catch (error) {
         // Ids and counts only - the reminder's text is the user's private note.
         this.logger.error(`Failed to deliver notification ${notification.id}`, error as Error);
+      }
+
+      // Roll a recurring reminder forward. Deliberately keyed on the CLAIM, not on the send: the
+      // claim already flipped this occurrence to `sent`, so skipping the roll-forward after a failed
+      // send would leave the reminder with no scheduled occurrence at all - it would stop recurring
+      // silently, which is worse than the one missed nudge. The store's own guard keeps this
+      // idempotent, so a retried tick cannot arm two.
+      if (claimed && notification.recurrence) {
+        try {
+          const next = await this.reminders.enqueueNextOccurrence(notification, now);
+          if (next) {
+            this.logger.log(`Next occurrence of reminder ${notification.reminderId} is at ${next}`);
+          }
+        } catch (error) {
+          this.logger.error(
+            `Failed to arm the next occurrence of reminder ${notification.reminderId}`,
+            error as Error,
+          );
+        }
       }
     }
 

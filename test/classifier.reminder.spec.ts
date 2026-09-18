@@ -137,6 +137,76 @@ describe('ClassifierService reminder validation', () => {
     }
   });
 
+  // acceptance: birthday-captured-yearly - a birthday states no clock time and no eventAt, so only
+  // a valid recurrence can make it actionable. Without this it would land in the clarify branch and
+  // never be stored.
+  it('keeps confidence for a recurring reminder with no eventAt and no time of day', async () => {
+    replyWithReminder(0.95, {
+      title: "Bob's birthday",
+      hasTimeOfDay: false,
+      recurrence: { freq: 'yearly', month: 6, day: 12 },
+    });
+
+    const result = await classifier.classify('Bob has a birthday on June 12', context);
+
+    expect(result.items[0].confidence).toBe(0.95);
+    // The 09:00 default and the user's timezone are filled in by code, not by the model.
+    expect(result.items[0].reminder?.recurrence).toEqual({
+      freq: 'yearly',
+      month: 6,
+      day: 12,
+      atLocal: '09:00',
+      timezone: 'Europe/Kyiv',
+    });
+  });
+
+  // acceptance: weekly-recurrence - the stated time survives as wall-clock, not as an instant
+  it('carries a weekly rule and its stated time through to the draft', async () => {
+    replyWithReminder(0.95, {
+      title: 'take out the trash',
+      hasTimeOfDay: true,
+      recurrence: { freq: 'weekly', weekday: 'monday', atLocal: '08:00' },
+    });
+
+    const result = await classifier.classify('Take out the trash every Monday at 8am', context);
+
+    expect(result.items[0].reminder?.recurrence).toEqual({
+      freq: 'weekly',
+      weekday: 'monday',
+      atLocal: '08:00',
+      timezone: 'Europe/Kyiv',
+    });
+  });
+
+  // Invariant: a recurrence is never invented. A one-off stays a one-off.
+  it('leaves recurrence absent when the model returned none', async () => {
+    replyWithReminder(0.95, {
+      title: 'haircut',
+      eventAt: '2026-09-17T12:00:00+03:00',
+      hasTimeOfDay: true,
+    });
+
+    const result = await classifier.classify('haircut on Thursday at 12', context);
+
+    expect(result.items[0].reminder?.recurrence).toBeUndefined();
+  });
+
+  // A half-stated rule is dropped rather than completed, and the reminder then has to stand on its
+  // eventAt like any other - here there is none, so it drops to clarify instead of being stored as
+  // a repeat at a guessed weekday.
+  it('drops an unresolvable rule and falls back to the eventAt requirement', async () => {
+    replyWithReminder(0.95, {
+      title: 'something weekly',
+      hasTimeOfDay: false,
+      recurrence: { freq: 'weekly' },
+    });
+
+    const result = await classifier.classify('remind me weekly', context);
+
+    expect(result.items[0].reminder?.recurrence).toBeUndefined();
+    expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+  });
+
   it('forces confidence below CONFIDENCE_ASK when eventAt carries no offset', async () => {
     replyWithReminder(0.95, {
       title: 'ambiguous',

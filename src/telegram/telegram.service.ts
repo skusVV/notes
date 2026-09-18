@@ -13,6 +13,7 @@ import {
 } from '../classifier/classifier.types';
 import { ClockService } from '../clock/clock.service';
 import { normalizeEventAt } from '../reminders/event-at';
+import { describeRecurrence, nextOccurrence } from '../reminders/recurrence';
 import {
   DueNotification,
   OwnedNotification,
@@ -406,7 +407,7 @@ export class TelegramService {
         : this.clock.nextDayAt(now, timezone, SNOOZE_TOMORROW_HOUR);
     const atLocal = this.clock.formatLocal(at, timezone);
 
-    await this.reminders.snoozeNotification(owned.ref, userId, at, atLocal);
+    await this.reminders.snoozeNotification(owned.ref, userId, at, atLocal, owned.recurring);
     await this.answerCallback(query.id, `I will remind you again at ${atLocal}.`, sink);
   }
 
@@ -674,7 +675,12 @@ export class TelegramService {
       const id = await this.reminders.create(
         from.id,
         chatId,
-        { title: reminder.title, eventAt: reminder.eventAt, notifyAt: reminder.notifyAt },
+        {
+          title: reminder.title,
+          eventAt: reminder.eventAt,
+          notifyAt: reminder.notifyAt,
+          recurrence: reminder.recurrence,
+        },
         originalText,
         now,
       );
@@ -685,8 +691,16 @@ export class TelegramService {
         };
       }
 
-      const resolved = normalizeEventAt(reminder.eventAt, now) ?? reminder.eventAt ?? '';
-      return { text: `Reminder saved: ${reminder.title}\nwhen: ${resolved}`, stored: true };
+      // A recurring reminder has no eventAt of its own - the time confirmed back is the occurrence
+      // that was just armed, recomputed from the same rule and the same "now" the store used.
+      const resolved = reminder.recurrence
+        ? (nextOccurrence(reminder.recurrence, now) ?? '')
+        : (normalizeEventAt(reminder.eventAt, now) ?? reminder.eventAt ?? '');
+      const lines = [`Reminder saved: ${reminder.title}`, `when: ${resolved}`];
+      if (reminder.recurrence) {
+        lines.push(`repeats: ${describeRecurrence(reminder.recurrence)}`);
+      }
+      return { text: lines.join('\n'), stored: true };
     } catch (error) {
       this.logger.error(`Failed to store reminder for ${sender}`, error as Error);
       return {
@@ -741,7 +755,7 @@ export class TelegramService {
         : `lead time: ${reminder.leadMinutes} min before`,
     );
     if (reminder.recurrence) {
-      details.push(`repeats: ${reminder.recurrence}`);
+      details.push(`repeats: ${describeRecurrence(reminder.recurrence)}`);
     }
 
     return this.withConfidence(details.join('\n'), item);

@@ -1,13 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Recurrence } from '../src/reminders/recurrence';
 import { DueNotification } from '../src/reminders/reminders.service';
 import { DEFAULT_SWEEP_INTERVAL_MINUTES, SweeperService } from '../src/telegram/sweeper.service';
 
 const NOW = new Date('2026-09-16T09:45:00+03:00');
 
+const BIRTHDAY: Recurrence = {
+  freq: 'yearly',
+  month: 6,
+  day: 12,
+  atLocal: '09:00',
+  timezone: 'Europe/Kyiv',
+};
+
 interface StoredNotification {
   id: string;
   at: Date;
   status: string;
+  /** Present for a recurring reminder's single occurrence. */
+  recurrence?: Recurrence;
+  atLocal?: string;
 }
 
 /** Minutes after NOW, as an instant. */
@@ -35,9 +47,27 @@ function fakeReminders(store: StoredNotification[]) {
           chatId: 1,
           title: 'something',
           eventAt: '2026-09-16T10:00:00+03:00',
+          atLocal: n.atLocal ?? '2026-09-16T10:00:00+03:00',
+          recurrence: n.recurrence,
         })),
     ),
     backfillLegacy: vi.fn(async (): Promise<number> => 0),
+    // Stands in for the transactional guard: it arms an occurrence only while the reminder has
+    // none scheduled, which is what makes a retried tick harmless.
+    enqueueNextOccurrence: vi.fn(async (notification: DueNotification): Promise<string | undefined> => {
+      if (store.some((n) => n.status === 'scheduled')) {
+        return undefined;
+      }
+      const next: StoredNotification = {
+        id: `${notification.id}-next`,
+        at: new Date('2028-06-12T09:00:00+03:00'),
+        atLocal: '2028-06-12T09:00:00+03:00',
+        status: 'scheduled',
+        recurrence: notification.recurrence,
+      };
+      store.push(next);
+      return next.atLocal;
+    }),
     claimForSend: vi.fn(async (ref: { id: string }): Promise<boolean> => {
       const found = store.find((n) => n.id === ref.id);
       if (!found || found.status !== 'scheduled') {
@@ -210,5 +240,88 @@ describe('SweeperService.sweep', () => {
     expect(await sweeper.sweep(NOW)).toBe(0);
     expect(reminders.findDue).not.toHaveBeenCalled();
     expect(telegram.sendReminder).not.toHaveBeenCalled();
+  });
+
+  it('does not try to roll a one-off reminder forward', async () => {
+    const { sweeper, reminders } = makeSweeper(store);
+
+    await sweeper.sweep(NOW);
+
+    expect(reminders.enqueueNextOccurrence).not.toHaveBeenCalled();
+  });
+});
+
+describe('SweeperService.sweep for a recurring reminder', () => {
+  /** The birthday's 2027 occurrence, and a tick 10 minutes before it - inside the look-ahead. */
+  const FIRED = new Date('2027-06-12T09:00:00+03:00');
+  const TICK = new Date('2027-06-12T08:50:00+03:00');
+
+  function recurringStore(): StoredNotification[] {
+    return [
+      {
+        id: 'occurrence-2027',
+        at: FIRED,
+        atLocal: '2027-06-12T09:00:00+03:00',
+        status: 'scheduled',
+        recurrence: BIRTHDAY,
+      },
+    ];
+  }
+
+  // acceptance: recurrence-rolls-forward - one delivery, and a NEW scheduled occurrence afterwards
+  it('delivers the occurrence and arms the following one', async () => {
+    const store = recurringStore();
+    const { sweeper, reminders, telegram } = makeSweeper(store);
+
+    expect(await sweeper.sweep(TICK)).toBe(1);
+    expect(telegram.sendReminder).toHaveBeenCalledTimes(1);
+    expect(reminders.enqueueNextOccurrence).toHaveBeenCalledTimes(1);
+    expect(store.find((n) => n.id === 'occurrence-2027')?.status).toBe('sent');
+    expect(store.filter((n) => n.status === 'scheduled').map((n) => n.atLocal)).toEqual([
+      '2028-06-12T09:00:00+03:00',
+    ]);
+  });
+
+  // acceptance (unit half): "enqueue exactly one next occurrence" idempotency - a retried tick
+  // must not leave two future occurrences, and it must not re-deliver
+  it('leaves exactly one scheduled occurrence when the tick is retried', async () => {
+    const store = recurringStore();
+    const { sweeper, telegram } = makeSweeper(store);
+
+    await sweeper.sweep(TICK);
+    expect(await sweeper.sweep(TICK)).toBe(0);
+
+    expect(telegram.sendReminder).toHaveBeenCalledTimes(1);
+    expect(store.filter((n) => n.status === 'scheduled')).toHaveLength(1);
+  });
+
+  // The recurrence must survive a failed send: the claim already flipped this occurrence to `sent`,
+  // so not arming the next one would silently stop the reminder forever.
+  it('still arms the next occurrence when the delivery fails', async () => {
+    const store = recurringStore();
+    const { sweeper, reminders, telegram } = makeSweeper(store);
+    telegram.sendReminder.mockRejectedValueOnce(new Error('telegram is down'));
+
+    expect(await sweeper.sweep(TICK)).toBe(0);
+    expect(reminders.enqueueNextOccurrence).toHaveBeenCalledTimes(1);
+    expect(store.filter((n) => n.status === 'scheduled')).toHaveLength(1);
+  });
+
+  it('does not arm anything when it loses the claim', async () => {
+    const store = recurringStore();
+    const { sweeper, reminders } = makeSweeper(store);
+    reminders.claimForSend.mockResolvedValue(false);
+
+    expect(await sweeper.sweep(TICK)).toBe(0);
+    expect(reminders.enqueueNextOccurrence).not.toHaveBeenCalled();
+  });
+
+  it('keeps delivering when arming the next occurrence throws', async () => {
+    const store = recurringStore();
+    const { sweeper, reminders, telegram } = makeSweeper(store);
+    reminders.enqueueNextOccurrence.mockRejectedValueOnce(new Error('transaction failed'));
+
+    expect(await sweeper.sweep(TICK)).toBe(1);
+    expect(telegram.sendReminder).toHaveBeenCalledTimes(1);
   });
 });

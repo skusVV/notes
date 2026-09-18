@@ -193,6 +193,13 @@ Reminders are stored in Firestore, so create two databases and grant access.
    hours, and each of its notifications sets its own to that notification's time plus 24 hours.
    Both policies are needed because Firestore does **not** cascade a delete into subcollections: a
    reaped reminder would otherwise leave its notifications behind, still due.
+
+   **Recurring reminders are exempt by design, and need no Console change.** A recurring reminder -
+   a birthday, "every Monday at 8am" - is written with **no** `expireAt` field at all, and neither
+   are its notifications. A TTL policy only deletes documents where its timestamp field is present,
+   so absence means "never expires" with nothing extra to configure. Do not "fix" this by giving
+   them a far-future `expireAt`: a far-future date eventually arrives, and a birthday is supposed to
+   outlive it.
 5. Add the **composite index** the delivery sweep queries through. On **each** database: **Firestore
    -> Indexes -> Composite -> Create index**.
    - Collection **group** id: `notifications`

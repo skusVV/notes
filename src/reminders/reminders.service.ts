@@ -4,6 +4,7 @@ import { DateTime } from 'luxon';
 import { FirestoreService } from '../firestore/firestore.service';
 import { computeExpireAt, EXPIRE_HOURS, normalizeEventAt } from './event-at';
 import { resolveNotifyTimes } from './notify-times';
+import { Recurrence, nextOccurrence, nextOccurrenceAfter, normalizeRecurrence } from './recurrence';
 
 /** The subcollection holding one document per nudge. Also the collection group the sweep queries. */
 export const NOTIFICATIONS = 'notifications';
@@ -17,6 +18,11 @@ export interface ReminderDraftInput {
    * them. Empty or unresolvable means one notification at `eventAt` - see {@link resolveNotifyTimes}.
    */
   notifyAt?: string[];
+  /**
+   * A validated repeat rule. Present means the recurring path: occurrences come from the rule, so
+   * `eventAt` is not needed and takes no part in the write.
+   */
+  recurrence?: Recurrence;
 }
 
 /** One nudge in the `/export` output. `at` is rendered in the same local-ISO form as `eventAt`. */
@@ -31,10 +37,18 @@ export interface ReminderExport {
   id: string;
   originalText: string;
   title: string;
+  /** For a recurring reminder this is the occurrence currently armed, not a fixed one-off date. */
   eventAt: string;
   createdAt: string;
-  expireAt: string;
+  /**
+   * `null` for a recurring reminder: it carries **no** `expireAt` field at all, which is how the
+   * Firestore TTL policy - which only deletes documents where the field is present - can never
+   * reap it. A birthday must outlive every other kind of reminder.
+   */
+  expireAt: string | null;
   status: string;
+  /** The repeat rule, or `null` for a one-off. */
+  recurrence: Recurrence | null;
   /** Every nudge this reminder owns, ascending. One entry for a reminder that named no extra time. */
   notifications: NotificationExport[];
 }
@@ -52,6 +66,14 @@ export interface DueNotification {
   chatId: number;
   title: string;
   eventAt: string;
+  /** This occurrence's own local time, the instant the following occurrence is measured from. */
+  atLocal: string;
+  /**
+   * Denormalised from the reminder, so the sweeper can roll a recurring reminder forward without
+   * reading the parent - the same reason `title` and `eventAt` are copied here. Absent for a
+   * one-off, which is exactly the "nothing to roll forward" signal.
+   */
+  recurrence?: Recurrence;
 }
 
 /** A notification loaded for an owner check, before a callback acts on it. */
@@ -60,6 +82,11 @@ export interface OwnedNotification {
   ref: DocumentReference;
   userId: number;
   status: string;
+  /**
+   * True when this nudge belongs to a recurring reminder. It carries no `expireAt`, and a snooze
+   * must not give it one - see {@link RemindersService.snoozeNotification}.
+   */
+  recurring: boolean;
 }
 
 /**
@@ -87,6 +114,11 @@ export class RemindersService {
    * reminder plus its notifications in a single batch. Returns the new reminder id, or `undefined`
    * when the store is unavailable or the time is not a resolvable future instant (no write) - the
    * caller then treats the reminder as unresolved and does not claim a store.
+   *
+   * A draft carrying a `recurrence` takes the recurring path instead: its occurrence comes from the
+   * rule (so no `eventAt` is required, and a supplied one is ignored), it is written with **no**
+   * `expireAt` so the TTL policy can never reap it, and it gets exactly **one** scheduled
+   * notification - the next occurrence. The sweeper arms the one after it on delivery.
    */
   async create(
     userId: number,
@@ -100,7 +132,12 @@ export class RemindersService {
       return undefined;
     }
 
-    const eventAt = normalizeEventAt(draft.eventAt, now);
+    const recurrence = draft.recurrence;
+    // For a recurring reminder `eventAt` is the occurrence currently armed, so list ordering, the
+    // delivery message and the notification's denormalised copy all keep working unchanged.
+    const eventAt = recurrence
+      ? nextOccurrence(recurrence, now)
+      : normalizeEventAt(draft.eventAt, now);
     if (!eventAt) {
       return undefined;
     }
@@ -114,13 +151,19 @@ export class RemindersService {
       eventAt,
       eventAtUtc: Timestamp.fromDate(eventInstant),
       createdAt: Timestamp.fromDate(now),
-      // The field the Firestore TTL policy targets, so an expired reminder is reaped automatically.
-      expireAt: Timestamp.fromDate(computeExpireAt(eventAt)),
       status: 'scheduled',
+      // A recurring reminder never expires, and "never" is expressed by the ABSENCE of the field the
+      // TTL policy targets - not by a far-future date, which would eventually come. A one-off keeps
+      // its expireAt so it is still reaped automatically.
+      ...(recurrence
+        ? { recurrence }
+        : { expireAt: Timestamp.fromDate(computeExpireAt(eventAt)) }),
     };
 
     const ref = db.collection('users').doc(String(userId)).collection('reminders').doc();
-    const notifyAt = resolveNotifyTimes(eventAt, draft.notifyAt, now);
+    // A recurring reminder has exactly one notification: the next occurrence. Extra notify times
+    // would each need their own roll-forward, which v1 does not model.
+    const notifyAt = recurrence ? [eventAt] : resolveNotifyTimes(eventAt, draft.notifyAt, now);
 
     const batch = db.batch();
     batch.set(ref, document);
@@ -136,9 +179,12 @@ export class RemindersService {
         chatId,
         title: draft.title,
         eventAt,
-        // Firestore does not cascade a delete into subcollections, so a notification carries its
-        // own TTL field; without it the parent's reaping would leave orphans behind.
-        expireAt: Timestamp.fromDate(computeExpireAt(atLocal)),
+        // Firestore does not cascade a delete into subcollections, so a one-off notification carries
+        // its own TTL field; without it the parent's reaping would leave orphans behind. A recurring
+        // one carries none, for the same reason its reminder carries none.
+        ...(recurrence
+          ? { recurrence }
+          : { expireAt: Timestamp.fromDate(computeExpireAt(atLocal)) }),
       });
     }
     await batch.commit();
@@ -212,8 +258,86 @@ export class RemindersService {
         chatId: typeof data.chatId === 'number' ? data.chatId : 0,
         title: typeof data.title === 'string' ? data.title : '',
         eventAt: typeof data.eventAt === 'string' ? data.eventAt : '',
+        atLocal: typeof data.atLocal === 'string' ? data.atLocal : '',
+        // Re-validated on read rather than trusted: a rule the resolver cannot compute must not
+        // silently become a reminder that stops recurring, and normalizeRecurrence is the one
+        // place that decides what is resolvable.
+        recurrence: normalizeRecurrence(data.recurrence, recurrenceZone(data.recurrence)),
       };
     });
+  }
+
+  /**
+   * Arms the occurrence that follows one just delivered, so a recurring reminder always has exactly
+   * one `scheduled` notification and can neither stop nor pile up duplicates. Returns the new
+   * notification's local time, or `undefined` when nothing was written.
+   *
+   * Two guards make it idempotent, which matters because Cloud Scheduler retries: the delivery's
+   * transactional `scheduled -> sent` claim means only one tick ever gets here for an occurrence,
+   * and this transaction additionally refuses to write when the reminder *already* has a scheduled
+   * notification. So a retried tick, or two overlapping ones, still leave exactly one.
+   *
+   * The next occurrence is measured from the **fired occurrence**, not from `now`: a tick runs up to
+   * one look-ahead interval early, so measuring from now would re-arm the occurrence that just
+   * fired and the reminder would never advance.
+   */
+  async enqueueNextOccurrence(
+    notification: DueNotification,
+    now: Date,
+  ): Promise<string | undefined> {
+    const db = this.firestore.db;
+    const recurrence = notification.recurrence;
+    const reminderRef = notification.ref.parent.parent;
+    if (!db || !recurrence || !reminderRef) {
+      return undefined;
+    }
+
+    const firedAt = DateTime.fromISO(notification.atLocal, { setZone: true });
+    const atLocal = nextOccurrenceAfter(recurrence, firedAt.isValid ? firedAt.toJSDate() : now);
+    if (!atLocal) {
+      this.logger.warn(`Could not resolve the next occurrence after notification ${notification.id}`);
+      return undefined;
+    }
+
+    const written = await db.runTransaction(async (tx) => {
+      const scheduled = await tx.get(
+        reminderRef.collection(NOTIFICATIONS).where('status', '==', 'scheduled').limit(1),
+      );
+      if (!scheduled.empty) {
+        return false;
+      }
+
+      tx.set(reminderRef.collection(NOTIFICATIONS).doc(), {
+        at: Timestamp.fromDate(DateTime.fromISO(atLocal, { setZone: true }).toJSDate()),
+        atLocal,
+        status: 'scheduled',
+        reminderId: notification.reminderId,
+        userId: notification.userId,
+        chatId: notification.chatId,
+        title: notification.title,
+        eventAt: atLocal,
+        recurrence,
+        // No expireAt: a recurring reminder's notifications are exempt from the TTL policy too.
+      });
+      // The reminder's eventAt tracks the occurrence currently armed, so /export and the eventAt
+      // ordering keep meaning "when this next happens" rather than freezing on the first one.
+      tx.update(reminderRef, {
+        eventAt: atLocal,
+        eventAtUtc: Timestamp.fromDate(DateTime.fromISO(atLocal, { setZone: true }).toJSDate()),
+      });
+      return true;
+    });
+
+    if (!written) {
+      this.logger.log(`Reminder ${notification.reminderId} already has a scheduled occurrence`);
+      return undefined;
+    }
+
+    // Ids and times only, never the reminder's text.
+    this.logger.log(
+      `Armed the next occurrence of reminder ${notification.reminderId} for user ${notification.userId}`,
+    );
+    return atLocal;
   }
 
   /**
@@ -351,6 +475,7 @@ export class RemindersService {
       ref: found.ref,
       userId,
       status: typeof data.status === 'string' ? data.status : '',
+      recurring: data.recurrence !== undefined && data.recurrence !== null,
     };
   }
 
@@ -366,21 +491,24 @@ export class RemindersService {
   /**
    * Re-arms one delivered notification for later. Only that notification's `at`/`atLocal` move:
    * `eventAt` is when the thing itself happens, and the reminder's other notifications are left
-   * exactly where they were.
+   * exactly where they were. A snooze never touches the recurrence either - it moves **this**
+   * occurrence and nothing else, and the following occurrence is already armed.
    */
   async snoozeNotification(
     ref: DocumentReference,
     userId: number,
     newAt: Date,
     atLocal: string,
+    recurring = false,
   ): Promise<void> {
     await ref.update({
       at: Timestamp.fromDate(newAt),
       atLocal,
       status: 'scheduled',
-      // The TTL must follow the notification, or a snooze past the original expiry would be reaped
-      // before it ever fires.
-      expireAt: Timestamp.fromDate(computeExpireAt(atLocal)),
+      // A one-off's TTL must follow the notification, or a snooze past the original expiry would be
+      // reaped before it ever fires. A recurring one has no expireAt and must not gain one here:
+      // that absence is the only thing keeping it out of reach of the TTL policy.
+      ...(recurring ? {} : { expireAt: Timestamp.fromDate(computeExpireAt(atLocal)) }),
     });
     this.logger.log(`Snoozed notification ${ref.id} for user ${userId}`);
   }
@@ -396,8 +524,11 @@ export class RemindersService {
       title: typeof data.title === 'string' ? data.title : '',
       eventAt: typeof data.eventAt === 'string' ? data.eventAt : '',
       createdAt: toIso(data.createdAt),
-      expireAt: toIso(data.expireAt),
+      // null, not '', when the field is absent: absence is the meaningful state here ("never
+      // expires"), and a reader has to be able to tell it from a value that failed to render.
+      expireAt: data.expireAt instanceof Timestamp ? data.expireAt.toDate().toISOString() : null,
       status: typeof data.status === 'string' ? data.status : '',
+      recurrence: normalizeRecurrence(data.recurrence, recurrenceZone(data.recurrence)) ?? null,
       notifications,
     };
   }
@@ -414,6 +545,16 @@ export class RemindersService {
       status: typeof data.status === 'string' ? data.status : '',
     };
   }
+}
+
+/**
+ * The timezone a stored recurrence was written with. It travels inside the rule, because a rule
+ * without its zone is not a time at all - so it is read back from there rather than from a config
+ * default that may since have changed.
+ */
+function recurrenceZone(value: unknown): string {
+  const zone = (value as { timezone?: unknown } | null)?.timezone;
+  return typeof zone === 'string' ? zone : '';
 }
 
 /** Serialise a Firestore Timestamp as a plain ISO string; anything else becomes empty. */

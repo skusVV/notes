@@ -45,6 +45,43 @@ steps:
       # reminders arrive late (cron slower) or the same window is swept twice (cron faster).
       - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,CLASSIFIER_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300,DEFAULT_TIMEZONE=Europe/Kyiv,REMINDER_SWEEP_INTERVAL_MINUTES=30,TEST_REFLECT_REPLY=${_REPLY_REFLECT},FIRESTORE_DATABASE=${_FIRESTORE_DB}
 
+  # Creates or updates the Cloud Scheduler job that ticks POST /sweep every 30 minutes - the
+  # schedule is defined here, not clicked together in Console, so it self-heals if ever deleted
+  # and matches whichever function (prod or test) this trigger just deployed. Runs after `deploy`
+  # (default Cloud Build ordering: steps run in listed order unless waitFor says otherwise) so the
+  # function already exists when its URL is looked up. The build's own service account needs
+  # roles/cloudscheduler.admin (or broader, e.g. Editor) for this step to succeed.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: schedule-sweep
+    entrypoint: bash
+    secretEnv: ['SWEEP_SECRET_VALUE']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        FUNCTION_URL=$(gcloud functions describe ${_FUNCTION_NAME} --region=${_REGION} --gen2 --format='value(serviceConfig.uri)')
+        if gcloud scheduler jobs describe ${_SWEEP_JOB_NAME} --location=${_REGION} >/dev/null 2>&1; then
+          gcloud scheduler jobs update http ${_SWEEP_JOB_NAME} \
+            --location=${_REGION} \
+            --schedule="*/30 * * * *" \
+            --time-zone="Europe/Kyiv" \
+            --uri="${FUNCTION_URL}/sweep" \
+            --update-headers="X-Sweep-Secret=${SWEEP_SECRET_VALUE}"
+        else
+          gcloud scheduler jobs create http ${_SWEEP_JOB_NAME} \
+            --location=${_REGION} \
+            --schedule="*/30 * * * *" \
+            --time-zone="Europe/Kyiv" \
+            --uri="${FUNCTION_URL}/sweep" \
+            --http-method=POST \
+            --headers="X-Sweep-Secret=${SWEEP_SECRET_VALUE}"
+        fi
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_ID}/secrets/${_SWEEP_SECRET_NAME}/versions/latest
+      env: SWEEP_SECRET_VALUE
+
 substitutions:
   _FUNCTION_NAME: telegram-echo-bot
   _REGION: europe-west1
@@ -52,10 +89,11 @@ substitutions:
   # isolated second function from this same file - see docs/specs/README.md:
   #   _FUNCTION_NAME=telegram-echo-bot-test  _TOKEN_SECRET=TELEGRAM_BOT_TOKEN_TEST
   #   _WEBHOOK_SECRET_NAME=TELEGRAM_WEBHOOK_SECRET_TEST  _REPLY_REFLECT=true  _FIRESTORE_DB=test
-  #   _SWEEP_SECRET_NAME=REMINDER_SWEEP_SECRET_TEST
+  #   _SWEEP_SECRET_NAME=REMINDER_SWEEP_SECRET_TEST  _SWEEP_JOB_NAME=reminder-sweep-test
   _TOKEN_SECRET: TELEGRAM_BOT_TOKEN
   _WEBHOOK_SECRET_NAME: TELEGRAM_WEBHOOK_SECRET
   _SWEEP_SECRET_NAME: REMINDER_SWEEP_SECRET
+  _SWEEP_JOB_NAME: reminder-sweep
   _REPLY_REFLECT: 'false'
   _FIRESTORE_DB: '(default)'
 

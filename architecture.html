@@ -245,8 +245,8 @@
       <p class="section-intro">A Telegram bot that today classifies messages and stores reminders, running as one Google Cloud Function. Everything on this page marked <span class="badge badge-planned">PLANNED</span> is designed but not built yet - see <a href="docs/architecture.md" class="code-path">docs/architecture.md</a> for the full reasoning.</p>
       <div class="masthead-meta">
         <span class="chip mono">v1.0.0</span>
-        <span class="chip mono">commit 0c18ee8</span>
-        <span class="chip">generated 2026-09-17</span>
+        <span class="chip mono">commit 1acc295</span>
+        <span class="chip">generated 2026-09-18</span>
         <span class="chip mono">regenerate: /update-architecture-docs</span>
       </div>
       <div class="legend">
@@ -259,28 +259,28 @@
     <!-- ============================================================ -->
     <section id="overview">
       <h2>Overview</h2>
-      <p class="section-intro">The bot receives a Telegram message, decides what kind of thing it is (a note, a reminder, a symptom, a question, and so on), and replies describing what it understood. It calls Google's Gemini model twice per message at most - once to turn speech into text, once to classify the text. Until recently it kept no memory between messages; now a resolved reminder is written to Firestore, delivered on schedule by a Cloud Scheduler sweep, and can be acknowledged or snoozed with a button tap.</p>
+      <p class="section-intro">The bot receives a Telegram message, decides what kind of thing it is (a note, a reminder, a symptom, a question, and so on), and replies describing what it understood. It calls Google's Gemini model twice per message at most - once to turn speech into text, once to classify the text. Until recently it kept no memory between messages; now a resolved reminder is written to Firestore as one or more independent notifications - "the evening before and the morning of" is two - each delivered on schedule by a Cloud Scheduler sweep, and acknowledged or snoozed with a button tap on its own.</p>
 
       <div class="stat-row">
         <div class="stat"><div class="num">1</div><div class="lbl">Cloud Function (gen2) + Firestore</div></div>
         <div class="stat"><div class="num">7</div><div class="lbl">classifier intents</div></div>
         <div class="stat"><div class="num">2</div><div class="lbl">Gemini calls per message, max</div></div>
         <div class="stat"><div class="num">~$0.65<span style="font-size:12px">/mo</span></div><div class="lbl">today, at ~20 msgs/day</div></div>
-        <div class="stat"><div class="num badge badge-live" style="font-size:15px">1</div><div class="lbl">Firestore collection live: reminders</div></div>
+        <div class="stat"><div class="num badge badge-live" style="font-size:15px">2</div><div class="lbl">Firestore collections live: reminders, notifications</div></div>
       </div>
 
       <div class="callout">
-        <p><b>Persistence and delivery have begun.</b> Reminders with a clear date and time are stored in Firestore and delivered by a Cloud Scheduler sweep with OK / +1h / Tomorrow buttons (spec <a href="docs/specs/0003-reminder-delivery.md" class="code-path">0003-reminder-delivery</a>); the other intents are still only previewed, so a reply that did not store everything it acted on still ends with a notice saying so. The <a href="#planned" class="code-path">Planned: Memory Layer</a> section below is the rest of the phase: the entries capture log and Vertex embeddings turn these replies into a searchable, remembered history.</p>
+        <p><b>Persistence and delivery have begun, and now scale to several nudges per reminder.</b> Reminders with a clear date and time are stored in Firestore as one or more independent <span class="mono">notifications</span> documents - one appointment can carry an evening-before nudge and a morning-of nudge, each claimed, delivered, acked and snoozed on its own by a Cloud Scheduler sweep with OK / +1h / Tomorrow buttons (spec <a href="docs/specs/0003-reminder-delivery.md" class="code-path">0003-reminder-delivery</a>, evolved by spec <a href="docs/specs/0004-multiple-notify-times.md" class="code-path">0004-multiple-notify-times</a> - <span class="badge badge-test">VERIFIED</span>, about to merge to <span class="mono">main</span>). The other intents are still only previewed, so a reply that did not store everything it acted on still ends with a notice saying so. The <a href="#planned" class="code-path">Planned: Memory Layer</a> section below is the rest of the phase: the entries capture log and Vertex embeddings turn these replies into a searchable, remembered history.</p>
       </div>
     </section>
 
     <!-- ============================================================ -->
     <section id="system-map">
       <h2>System Map</h2>
-      <p class="section-intro">Who talks to whom. One Cloud Function sits in the middle: Telegram sends it updates over a webhook, it calls Vertex AI (Google's hosted Gemini models) for both speech-to-text and classification, it writes reminders to Firestore, and a Cloud Scheduler cron now ticks the function's own <span class="mono">/sweep</span> endpoint to deliver due reminders. Cloud Build redeploys the whole thing automatically on every push. The one remaining amber box (Vertex embeddings) is not built yet - it shows where the rest of the planned memory layer plugs in.</p>
+      <p class="section-intro">Who talks to whom. One Cloud Function sits in the middle: Telegram sends it updates over a webhook, it calls Vertex AI (Google's hosted Gemini models) for both speech-to-text and classification, it writes reminders and their independent notification records to Firestore, and a Cloud Scheduler cron now ticks the function's own <span class="mono">/sweep</span> endpoint to deliver due notifications. Cloud Build redeploys the whole thing automatically on every push. The one remaining amber box (Vertex embeddings) is not built yet - it shows where the rest of the planned memory layer plugs in.</p>
 
       <figure class="diagram-frame">
-        <svg viewBox="0 0 1060 660" role="img" aria-label="Telegram sends webhook updates to a Cloud Function running NestJS, which calls Vertex AI's Gemini model to transcribe and classify messages; Secret Manager injects credentials and Cloud Build deploys the function on every GitHub push; Firestore stores reminders and a Cloud Scheduler cron ticks the function's own /sweep endpoint to deliver them; only Vertex embeddings remain unconnected.">
+        <svg viewBox="0 0 1060 660" role="img" aria-label="Telegram sends webhook updates to a Cloud Function running NestJS, which calls Vertex AI's Gemini model to transcribe and classify messages; Secret Manager injects credentials and Cloud Build deploys the function on every GitHub push; Firestore stores reminders and their independent notification records, and a Cloud Scheduler cron ticks the function's own /sweep endpoint to deliver them; only Vertex embeddings remain unconnected.">
 
           <!-- GitHub -->
           <rect class="box-live" x="40" y="30" width="190" height="60" rx="9"/>
@@ -348,11 +348,12 @@
           <line class="arrow" x1="722" y1="355" x2="788" y2="355" marker-end="url(#m-arrow)"/>
           <text class="arrow-label" x="727" y="347" style="font-size:9.5px">generateContent</text>
 
-          <!-- Firestore (live: reminders) -->
-          <rect class="box-live" x="300" y="530" width="200" height="86" rx="9"/>
-          <text class="box-title" x="400" y="562" text-anchor="middle">Firestore</text>
-          <text class="box-sub" x="400" y="580" text-anchor="middle">Native mode, europe-west1</text>
-          <text class="box-sub" x="400" y="596" text-anchor="middle">reminders (live)</text>
+          <!-- Firestore (live: reminders + notifications) -->
+          <rect class="box-live" x="300" y="530" width="200" height="104" rx="9"/>
+          <text class="box-title" x="400" y="558" text-anchor="middle">Firestore</text>
+          <text class="box-sub" x="400" y="575" text-anchor="middle">Native mode, europe-west1</text>
+          <text class="box-sub" x="400" y="591" text-anchor="middle">reminders (live)</text>
+          <text class="box-sub" x="400" y="607" text-anchor="middle">notifications (live)</text>
 
           <!-- Cloud Scheduler (live: sweep) -->
           <rect class="box-live" x="540" y="530" width="200" height="86" rx="9"/>
@@ -366,7 +367,7 @@
           <text class="arrow-label" x="405" y="502">read/write per user</text>
           <text class="arrow-label" x="645" y="502">POST /sweep every 30 min</text>
         </svg>
-        <figcaption>Today: Telegram ↔ one Cloud Function ↔ Vertex AI, with reminders written to Firestore and delivered by a Cloud Scheduler sweep (spec 0003), redeployed by Cloud Build on every push. Amber: Vertex embeddings, the one piece of this diagram still planned.</figcaption>
+        <figcaption>Today: Telegram ↔ one Cloud Function ↔ Vertex AI, with reminders and their notifications written to Firestore and delivered independently by a Cloud Scheduler sweep (specs 0003-0004), redeployed by Cloud Build on every push. Amber: Vertex embeddings, the one piece of this diagram still planned.</figcaption>
       </figure>
     </section>
 
@@ -407,15 +408,15 @@
           <rect class="box-danger" x="900" y="130" width="300" height="130" rx="8"/>
           <text class="box-title" x="1050" y="155" text-anchor="middle">callback_query: gate + owner check</text>
           <text class="box-sub" x="1050" y="173" text-anchor="middle">ALLOWED_USERS gate, same allowlist</text>
-          <text class="box-sub" x="1050" y="189" text-anchor="middle">parse callback_data: rem:&lt;action&gt;:&lt;id&gt;</text>
-          <text class="box-sub" x="1050" y="205" text-anchor="middle">owner check: reminder.userId == from.id</text>
+          <text class="box-sub" x="1050" y="189" text-anchor="middle">parse callback_data: rem:&lt;action&gt;:&lt;notificationId&gt;</text>
+          <text class="box-sub" x="1050" y="205" text-anchor="middle">owner check: notification.userId == from.id</text>
           <text class="box-sub" x="1050" y="223" text-anchor="middle" style="fill:var(--ink-dim)">any failure -&gt; refusal via answerCallbackQuery, no write</text>
           <line class="arrow" x1="1050" y1="260" x2="1050" y2="292" marker-end="url(#m-arrow)"/>
 
           <rect class="box-live" x="900" y="294" width="300" height="100" rx="8"/>
           <text class="box-title" x="1050" y="319" text-anchor="middle">Apply, then answerCallbackQuery</text>
-          <text class="box-sub" x="1050" y="337" text-anchor="middle">ok → acked · 1h → +1h · tmrw → next day 09:00 local</text>
-          <text class="box-sub" x="1050" y="353" text-anchor="middle">snooze moves remindAt only; eventAt never changes</text>
+          <text class="box-sub" x="1050" y="337" text-anchor="middle">ok → acks that notification · 1h/tmrw → moves it only</text>
+          <text class="box-sub" x="1050" y="353" text-anchor="middle">eventAt and the reminder's other notifications untouched</text>
           <text class="box-sub" x="1050" y="369" text-anchor="middle" style="fill:var(--ink-dim)">removes the keyboard (best effort) after ok</text>
 
           <path class="arrow" d="M1050,394 L1050,922 L582,922" marker-end="url(#m-arrow)"/>
@@ -469,7 +470,7 @@
           <text class="box-title" x="410" y="715" text-anchor="middle">Per-intent handler; reminder persisted</text>
           <text class="box-sub" x="410" y="733" text-anchor="middle">note · reminder · symptom · question</text>
           <text class="box-sub" x="410" y="747" text-anchor="middle">actor_info · correction · other</text>
-          <text class="box-sub" x="410" y="761" text-anchor="middle" style="fill:var(--ink-dim)">reminder → Firestore + confirm · confidence &lt; 0.5 → asks</text>
+          <text class="box-sub" x="410" y="761" text-anchor="middle" style="fill:var(--ink-dim)">reminder → Firestore + notification(s) · confidence &lt; 0.5 → asks</text>
           <line class="arrow" x1="410" y1="766" x2="410" y2="798" marker-end="url(#m-arrow)"/>
 
           <!-- S9 -->
@@ -483,7 +484,7 @@
           <text class="box-title" x="410" y="919" text-anchor="middle">Controller returns 200 - always</text>
           <text class="box-sub" x="410" y="936" text-anchor="middle">thrown errors are logged, never surfaced to Telegram</text>
         </svg>
-        <figcaption>The allowlist gate (④) and the has-content check (③) each have to run in this exact order - swap them and either strangers get billed model calls, or silent update types start drawing refusal replies. A button tap (<span class="mono">callback_query</span>) skips both: it is already behind the same webhook-secret check, but runs its own allowlist gate and an owner check before touching a reminder.</figcaption>
+        <figcaption>The allowlist gate (④) and the has-content check (③) each have to run in this exact order - swap them and either strangers get billed model calls, or silent update types start drawing refusal replies. A button tap (<span class="mono">callback_query</span>) skips both: it is already behind the same webhook-secret check, but runs its own allowlist gate and an owner check before touching a notification - one reminder can own several, and a tap only ever moves the one it was sent for.</figcaption>
       </figure>
     </section>
 
@@ -517,7 +518,7 @@
           <thead><tr><th>Intent</th><th>Meaning</th><th>Today</th><th>Once memory ships</th></tr></thead>
           <tbody>
             <tr><td class="mono">note</td><td>A thought or fact worth remembering - the default for anything worth keeping</td><td>Reported back</td><td class="planned">Embedded + tagged, becomes searchable</td></tr>
-            <tr><td class="mono">reminder</td><td>Something to be reminded about later; asks if no time was given</td><td>Resolved, <b>stored</b>, and <b>delivered</b> by a Cloud Scheduler sweep with OK / +1h / Tomorrow buttons</td><td class="planned">Multiple notify times (spec 0004) and recurrence (spec 0005)</td></tr>
+            <tr><td class="mono">reminder</td><td>Something to be reminded about later; asks if no time was given</td><td>Resolved and <b>stored</b> as one or more independent <span class="mono">notifications</span> (spec 0004), each <b>delivered</b>, acked and snoozed on its own by a Cloud Scheduler sweep with OK / +1h / Tomorrow buttons</td><td class="planned">Recurrence (spec 0005)</td></tr>
             <tr><td class="mono">symptom</td><td>A health event for the user or someone they name</td><td>Reported back</td><td class="planned">Written to <span class="mono">symptoms</span>, normalized type</td></tr>
             <tr><td class="mono">question</td><td>Asking to read back their own history - never answered today</td><td>"I cannot answer yet, no history to search"</td><td class="planned">Runs retrieval: structured query, vector search, or both</td></tr>
             <tr><td class="mono">actor_info</td><td>A fact about a named person ("my wife's birthday is in May")</td><td>Reported back</td><td class="planned">Updates an <span class="mono">actors</span> record, not a note</td></tr>
@@ -532,6 +533,12 @@
       <p class="section-intro">Spec 0002 added a fourth guard for reminders. The classifier is now handed the current local time (the new <span class="mono">now</span> field on <span class="mono">ClassifierContext</span>) and told to resolve relative speech - "Thursday at 12", "next Thursday", "the 25th" - into an ISO instant carrying the user's offset. It also returns a required <span class="mono">hasTimeOfDay</span> flag: <span class="mono">true</span> only when the message stated an explicit clock time, <span class="mono">false</span> for a bare date or weekday.</p>
       <div class="callout">
         <p><b>The invent-nothing rule.</b> When <span class="mono">hasTimeOfDay</span> is false, the code forces the item's confidence below <span class="mono">CONFIDENCE_ASK</span>, so the bot asks instead of filing a guessed time. This is a deterministic backstop: a model that copies the hour from "now" produces a valid-looking instant that <a href="src/reminders/event-at.ts" class="code-path">normalizeEventAt</a> alone cannot catch, so a reminder whose time of day was never actually spoken is treated as unresolved even when its <span class="mono">eventAt</span> parses.</p>
+      </div>
+
+      <h3 style="margin-top:22px">Notify times: one event, several independent nudges</h3>
+      <p class="section-intro">Spec 0004 separates <em>when the thing happens</em> from <em>when to nudge about it</em>. A reminder keeps exactly one <span class="mono">eventAt</span>; the classifier's new <span class="mono">notifyAt</span> is an array - one entry per requested nudge, so "the evening before and the morning of" is two entries, not one. Each entry is either an explicit ISO instant with an offset or one of five fixed relative keywords - <span class="mono">morning_of</span>, <span class="mono">evening_of</span>, <span class="mono">morning_before</span>, <span class="mono">evening_before</span>, <span class="mono">at_event</span>. <a href="src/reminders/notify-times.ts" class="code-path">notify-times.ts</a> resolves each keyword against <span class="mono">eventAt</span> - "morning" is a fixed 09:00 local, "evening" 19:00 local, both fixed for v1 - then de-duplicates, sorts the results ascending, and drops anything at or before "now" (it would otherwise fire on the very next sweep instead of when it was meant to). A message that names no notify time at all still gets exactly one notification, at <span class="mono">eventAt</span> - the 0002/0003 behaviour, unchanged.</p>
+      <div class="callout">
+        <p><b>Notifications, not the reminder, are the delivery source of truth.</b> <a href="src/reminders/reminders.service.ts" class="code-path">RemindersService.create</a> writes the reminder document once, plus one <span class="mono">notifications/{autoId}</span> document per resolved instant - each with its own <span class="mono">status</span>, claimed, sent, acked and snoozed independently of the others. The reminder's own <span class="mono">status</span> field is written once at creation and never changes again; see the notifications record in the <a href="#planned" class="code-path">Planned: Memory Layer</a> data model below for what moved off the reminder document.</p>
       </div>
     </section>
 
@@ -548,28 +555,31 @@
             <tr><td><a href="src/main.ts" class="code-path">src/main.ts</a></td><td>-</td><td>Local-only Nest dev server (<span class="mono">npm run start:local</span>), not used in production.</td></tr>
             <tr><td><a href="src/app.module.ts" class="code-path">src/app.module.ts</a></td><td>-</td><td>Root Nest module. Global <span class="mono">ConfigModule</span> (env vars) + Clock, Firestore, Reminders and Telegram modules.</td></tr>
             <tr><td><a href="src/telegram/telegram.controller.ts" class="code-path">telegram/telegram.controller.ts</a></td><td>Telegram</td><td>POST / webhook (routes <span class="mono">callback_query</span> too), GET / health check, POST /sweep for the Cloud Scheduler tick, timing-safe comparison for both the webhook and sweep secrets.</td></tr>
-            <tr><td><a href="src/telegram/telegram.service.ts" class="code-path">telegram/telegram.service.ts</a></td><td>Telegram</td><td>The whole branch table: allowlist, commands (incl. <span class="mono">/export</span>), voice, classification routing, reminder persistence, <span class="mono">callback_query</span> handling (gate, owner check, ack/snooze), <span class="mono">sendReminder</span>, chunked replies.</td></tr>
+            <tr><td><a href="src/telegram/telegram.service.ts" class="code-path">telegram/telegram.service.ts</a></td><td>Telegram</td><td>The whole branch table: allowlist, commands (incl. <span class="mono">/export</span>), voice, classification routing, reminder persistence, <span class="mono">callback_query</span> handling (gate, owner check, ack/snooze - now keyed on a <b>notification id</b>, spec 0004), <span class="mono">sendReminder</span>, chunked replies.</td></tr>
             <tr><td><a href="src/telegram/telegram.types.ts" class="code-path">telegram/telegram.types.ts</a></td><td>Telegram</td><td>The slice of Telegram's Update shape this bot actually reads, plus <span class="mono">callback_query</span> and the inline-keyboard types.</td></tr>
             <tr><td><a href="src/telegram/telegram.module.ts" class="code-path">telegram/telegram.module.ts</a></td><td>Telegram</td><td>Wires the controller + service + <span class="mono">SweeperService</span>, imports Transcription, Classifier, Reminders and Clock modules.</td></tr>
-            <tr><td><a href="src/telegram/sweeper.service.ts" class="code-path">telegram/sweeper.service.ts</a></td><td>Telegram</td><td><b>New (spec 0003).</b> Delivery half of reminders: finds due reminders, claims each in a transaction, then hands it to <span class="mono">TelegramService.sendReminder</span>. Lives in the telegram module (not reminders) to avoid an import cycle.</td></tr>
+            <tr><td><a href="src/telegram/sweeper.service.ts" class="code-path">telegram/sweeper.service.ts</a></td><td>Telegram</td><td>Delivery half of reminders (spec 0003, evolved by 0004): sweeps the <span class="mono">notifications</span> collection group (not <span class="mono">reminders</span>), claims each due notification in a transaction, then hands it to <span class="mono">TelegramService.sendReminder</span>; also runs the one-time legacy <span class="mono">remindAt</span>→notification backfill on every tick. Lives in the telegram module (not reminders) to avoid an import cycle.</td></tr>
             <tr><td><a href="src/transcription/transcription.service.ts" class="code-path">transcription/transcription.service.ts</a></td><td>Transcription</td><td>Speech to text via Vertex AI. Named for the outcome, not the vendor - swapping models touches only this file.</td></tr>
             <tr><td><a href="src/transcription/transcription.module.ts" class="code-path">transcription/transcription.module.ts</a></td><td>Transcription</td><td>Nest module wrapper, exports the service.</td></tr>
-            <tr><td><a href="src/classifier/classifier.service.ts" class="code-path">classifier/classifier.service.ts</a></td><td>Classifier</td><td>Structured-output classification via Vertex AI, date resolution against <span class="mono">now</span>, the <span class="mono">hasTimeOfDay</span> guard, plus every defensive parsing rule.</td></tr>
-            <tr><td><a href="src/classifier/classifier.types.ts" class="code-path">classifier/classifier.types.ts</a></td><td>Classifier</td><td>Intent union, draft shapes, confidence constants, the <span class="mono">now</span> context field.</td></tr>
+            <tr><td><a href="src/classifier/classifier.service.ts" class="code-path">classifier/classifier.service.ts</a></td><td>Classifier</td><td>Structured-output classification via Vertex AI, date resolution against <span class="mono">now</span>, the <span class="mono">hasTimeOfDay</span> guard, the <span class="mono">notifyAt</span> array of relative keywords/ISO instants (spec 0004), plus every defensive parsing rule.</td></tr>
+            <tr><td><a href="src/classifier/classifier.types.ts" class="code-path">classifier/classifier.types.ts</a></td><td>Classifier</td><td>Intent union, draft shapes (<span class="mono">ReminderDraft.notifyAt</span> since spec 0004), confidence constants, the <span class="mono">now</span> context field.</td></tr>
             <tr><td><a href="src/classifier/classifier.module.ts" class="code-path">classifier/classifier.module.ts</a></td><td>Classifier</td><td>Nest module wrapper, exports the service.</td></tr>
             <tr><td><a href="src/clock/clock.service.ts" class="code-path">clock/clock.service.ts</a></td><td>Clock</td><td>The single source of "now": an <span class="mono">X-Test-Now</span> override pins it for deterministic date resolution, offset-aware local-time formatting, plus the <span class="mono">plusHours</span> / <span class="mono">nextDayAt</span> snooze-target helpers (luxon).</td></tr>
             <tr><td><a href="src/clock/clock.module.ts" class="code-path">clock/clock.module.ts</a></td><td>Clock</td><td>Nest module wrapper, exports the service.</td></tr>
             <tr><td><a href="src/firestore/firestore.service.ts" class="code-path">firestore/firestore.service.ts</a></td><td>Firestore</td><td>Thin Firestore client. Reads <span class="mono">GCP_PROJECT</span> + <span class="mono">FIRESTORE_DATABASE</span>; degrades (<span class="mono">available=false</span>) when unset, like the model services.</td></tr>
             <tr><td><a href="src/firestore/firestore.module.ts" class="code-path">firestore/firestore.module.ts</a></td><td>Firestore</td><td>Nest module wrapper, exports the service.</td></tr>
-            <tr><td><a href="src/reminders/reminders.service.ts" class="code-path">reminders/reminders.service.ts</a></td><td>Reminders</td><td>Persists and lists reminders at <span class="mono">users/{userId}/reminders/{autoId}</span>; now also <span class="mono">findDue</span>, <span class="mono">claimForSend</span>, <span class="mono">ack</span>, <span class="mono">snooze</span> and <span class="mono">getOwned</span> - the delivery half (spec 0003).</td></tr>
+            <tr><td><a href="src/reminders/reminders.service.ts" class="code-path">reminders/reminders.service.ts</a></td><td>Reminders</td><td>Persists a reminder plus one <span class="mono">notifications/{autoId}</span> document per resolved notify time (spec 0004); <span class="mono">findDue</span>, <span class="mono">claimForSend</span>, <span class="mono">ackNotification</span>, <span class="mono">snoozeNotification</span> and <span class="mono">getOwnedNotification</span> now all operate per notification, not per reminder; <span class="mono">backfillLegacy</span> converts old single-<span class="mono">remindAt</span> reminders into one notification each.</td></tr>
+            <tr><td><a href="src/reminders/notify-times.ts" class="code-path">reminders/notify-times.ts</a></td><td>Reminders</td><td><b>New (spec 0004).</b> <span class="mono">resolveNotifyTimes</span> turns the classifier's <span class="mono">notifyAt</span> entries (relative keywords or ISO instants) into de-duplicated, ascending, future-only notify instants, falling back to a single notification at <span class="mono">eventAt</span> when none resolve; <span class="mono">resolveRelativeNotify</span> resolves <span class="mono">morning_of</span> / <span class="mono">evening_before</span> / etc. against <span class="mono">eventAt</span> (09:00 / 19:00 local, fixed for v1).</td></tr>
             <tr><td><a href="src/reminders/event-at.ts" class="code-path">reminders/event-at.ts</a></td><td>Reminders</td><td><span class="mono">normalizeEventAt</span> / <span class="mono">computeExpireAt</span>: validate <span class="mono">eventAt</span> to canonical offset form, reject past or offset-less times, derive the 24h TTL.</td></tr>
             <tr><td><a href="src/reminders/reminders.module.ts" class="code-path">reminders/reminders.module.ts</a></td><td>Reminders</td><td>Nest module wrapper, imports Firestore, exports the service.</td></tr>
             <tr><td><a href="test/telegram.service.spec.ts" class="code-path">test/telegram.service.spec.ts</a></td><td>Tests</td><td>Vitest unit tests for command routing (<span class="mono">/version</span>, <span class="mono">/help</span>, unknown commands).</td></tr>
             <tr><td><a href="test/clock.service.spec.ts" class="code-path">test/clock.service.spec.ts</a></td><td>Tests</td><td>Vitest: the <span class="mono">X-Test-Now</span> override parses, and garbage falls through to the real clock.</td></tr>
             <tr><td><a href="test/event-at.spec.ts" class="code-path">test/event-at.spec.ts</a></td><td>Tests</td><td>Vitest: <span class="mono">eventAt</span> normalisation, past / offset-less rejection, TTL maths.</td></tr>
+            <tr><td><a href="test/notify-times.spec.ts" class="code-path">test/notify-times.spec.ts</a></td><td>Tests</td><td><b>New (spec 0004).</b> Vitest: resolving each relative notify keyword against <span class="mono">eventAt</span> (09:00 / 19:00 local), de-duplication, past-instant rejection, and the <span class="mono">eventAt</span> fallback when nothing resolves.</td></tr>
+            <tr><td><a href="test/reminders.service.spec.ts" class="code-path">test/reminders.service.spec.ts</a></td><td>Tests</td><td><b>New (spec 0004).</b> Vitest: <span class="mono">create</span> writes one notification per resolved notify time (and exactly one when none was named); <span class="mono">list</span> exports each reminder's notifications and no longer emits the retired <span class="mono">remindAt</span>.</td></tr>
             <tr><td><a href="test/classifier.reminder.spec.ts" class="code-path">test/classifier.reminder.spec.ts</a></td><td>Tests</td><td>Vitest (model stubbed): the <span class="mono">hasTimeOfDay=false</span> path drops confidence below the ask threshold.</td></tr>
-            <tr><td><a href="test/sweeper.service.spec.ts" class="code-path">test/sweeper.service.spec.ts</a></td><td>Tests</td><td>Vitest: the sweep cutoff (<span class="mono">now + interval</span>) picks up a 15-min-ahead reminder and rejects a 75-min-ahead one.</td></tr>
-            <tr><td><a href="test/telegram.callback.spec.ts" class="code-path">test/telegram.callback.spec.ts</a></td><td>Tests</td><td>Vitest: <span class="mono">callback_data</span> parsing, the <span class="mono">+1h</span> / "next day 09:00 local" snooze maths (DST-aware), and the owner-check refusal path.</td></tr>
+            <tr><td><a href="test/sweeper.service.spec.ts" class="code-path">test/sweeper.service.spec.ts</a></td><td>Tests</td><td>Vitest: the sweep cutoff (<span class="mono">now + interval</span>) picks up a 15-min-ahead due notification and rejects a 75-min-ahead one, per notification.</td></tr>
+            <tr><td><a href="test/telegram.callback.spec.ts" class="code-path">test/telegram.callback.spec.ts</a></td><td>Tests</td><td>Vitest: <span class="mono">callback_data</span> parsing (now keyed on a notification id), the <span class="mono">+1h</span> / "next day 09:00 local" snooze maths (DST-aware), and the owner-check refusal path - including that acting on one notification never moves another notification of the same reminder.</td></tr>
             <tr><td><a href="test/telegram.controller.sweep.spec.ts" class="code-path">test/telegram.controller.sweep.spec.ts</a></td><td>Tests</td><td>Vitest: <span class="mono">POST /sweep</span> auth - missing/wrong <span class="mono">X-Sweep-Secret</span> is <span class="mono">401</span>, a valid one runs the sweep.</td></tr>
             <tr><td><a href="cloudbuild.yaml" class="code-path">cloudbuild.yaml</a></td><td>Deploy</td><td>What the GitHub push trigger runs - the entire deploy pipeline lives in this one file.</td></tr>
             <tr><td><a href="docs/architecture.md" class="code-path">docs/architecture.md</a></td><td>Docs</td><td>The full memory-layer plan: schema, retrieval design, build order, cost.</td></tr>
@@ -579,7 +589,7 @@
       </div>
 
       <div class="callout">
-        <p>A real vitest suite exists now - 7 spec files under <a href="test/" class="code-path">test/</a> and a <span class="mono">"test": "vitest run"</span> script in <a href="package.json" class="code-path">package.json</a>, covering command routing, the clock override, <span class="mono">eventAt</span> maths, the reminder classifier guard, the sweep cutoff, snooze/callback parsing, and the <span class="mono">/sweep</span> auth contract. <a href="CLAUDE.md" class="code-path">CLAUDE.md</a>'s "There is no test framework configured" line (in its Commands section) predates all of this and is now stale - it should say a vitest suite exists alongside the curl-based verification it still correctly describes for everything else.</p>
+        <p>A real vitest suite exists now - 9 spec files under <a href="test/" class="code-path">test/</a> and a <span class="mono">"test": "vitest run"</span> script in <a href="package.json" class="code-path">package.json</a>, covering command routing, the clock override, <span class="mono">eventAt</span> maths, the reminder classifier guard, the sweep cutoff, snooze/callback parsing, the <span class="mono">/sweep</span> auth contract, and (spec 0004) resolving and writing multiple notify times per reminder. <a href="CLAUDE.md" class="code-path">CLAUDE.md</a>'s "There is no test framework configured" line (in its Commands section) predates all of this and is now stale - it should say a vitest suite exists alongside the curl-based verification it still correctly describes for everything else. Its opening section is stale in a bigger way too: it still calls persistence "Planned next... Nothing is implemented yet," but reminders, Firestore, the Cloud Scheduler sweep, and now independent per-reminder notifications (specs 0002-0004) are built - 0002 and 0003 are live in production and 0004 is verified and about to ship.</p>
       </div>
     </section>
 
@@ -630,7 +640,7 @@
       </div>
 
       <div class="callout">
-        <p><b>Firestore setup (Console, one-time).</b> Create two <b>Native</b>-mode databases in <span class="mono">europe-west1</span> (permanent, cannot be changed later): <span class="mono">(default)</span> for production and <span class="mono">test</span> for the isolated test function. On <b>each</b>, add a Time-to-live policy on collection group <span class="mono">reminders</span>, timestamp field <span class="mono">expireAt</span>, so an expired reminder is reaped roughly 24 hours after its event, plus a <b>composite index</b> on the <span class="mono">reminders</span> collection group (<span class="mono">status</span> Asc, <span class="mono">remindAt</span> Asc) that the sweep's <span class="mono">findDue</span> query needs (spec 0003) - skipping it fails with a <span class="mono">FAILED_PRECONDITION</span> carrying a Console link that creates exactly this index. The runtime compute service account needs <span class="mono">roles/datastore.user</span> (above).</p>
+        <p><b>Firestore setup (Console, one-time).</b> Create two <b>Native</b>-mode databases in <span class="mono">europe-west1</span> (permanent, cannot be changed later): <span class="mono">(default)</span> for production and <span class="mono">test</span> for the isolated test function. On <b>each</b>, add <b>two</b> Time-to-live policies, timestamp field <span class="mono">expireAt</span> on both: collection group <span class="mono">reminders</span>, and (spec 0004) collection group <span class="mono">notifications</span> - Firestore does not cascade a delete into subcollections, so a reaped reminder would otherwise leave its notifications behind, still due. Also add a <b>composite index</b> on the <span class="mono">notifications</span> collection group (query scope <b>Collection group</b>; <span class="mono">status</span> Asc, <span class="mono">at</span> Asc) that the sweep's <span class="mono">findDue</span> query needs since 0004 - skipping it fails with a <span class="mono">FAILED_PRECONDITION</span> carrying a Console link that creates exactly this index (this is exactly what blocked 0004's first verification attempt). Keep the older <span class="mono">reminders</span> (<span class="mono">status</span> Asc, <span class="mono">remindAt</span> Asc) index from spec 0003 until the one-time legacy backfill finishes (the sweep logs <span class="mono">Backfilled 0 legacy reminder(s)</span> once it's done), then it can be deleted. The runtime compute service account needs <span class="mono">roles/datastore.user</span> (above), which already covers both collections.</p>
       </div>
 
       <div class="callout">
@@ -736,17 +746,16 @@
       </div>
 
       <h3 style="margin-top:22px">Specs in flight</h3>
-      <p class="section-intro">State comes straight from each spec's frontmatter in <a href="docs/specs/README.md" class="code-path">docs/specs/</a>. A colour here is build status, not the confidence ladder above: teal = built, amber = written but not built yet. Two files share the id prefix <span class="mono">0003-</span> by accident of numbering - <span class="mono">0003-reminder-delivery</span> and <span class="mono">0003-reminders-schedule</span> are unrelated specs; each row below is keyed by its own full id.</p>
+      <p class="section-intro">State comes straight from each spec's frontmatter in <a href="docs/specs/README.md" class="code-path">docs/specs/</a>. A colour here is build status, not the confidence ladder above: teal = built and merged to <span class="mono">main</span>, gray = built and proven on the isolated test function but not yet merged, amber = written but not built yet.</p>
       <div class="table-frame">
         <table>
           <thead><tr><th>Spec</th><th>State</th><th>What it delivers</th></tr></thead>
           <tbody>
             <tr><td><a href="docs/specs/0001-version.md" class="code-path">0001-version</a></td><td><span class="badge badge-live">DONE</span></td><td>The <span class="mono">/version</span> command and the first vitest suite.</td></tr>
             <tr><td><a href="docs/specs/0002-reminders-capture.md" class="code-path">0002-reminders-capture</a></td><td><span class="badge badge-live">DONE</span></td><td>Reminder capture, resolve and store - this repo's first persistence.</td></tr>
-            <tr><td><a href="docs/specs/0003-reminder-delivery.md" class="code-path">0003-reminder-delivery</a></td><td><span class="badge badge-live">VERIFIED</span></td><td>The Scheduler <span class="mono">/sweep</span>, delivery, and OK / +1h / Tomorrow callbacks (the change reflected across this page).</td></tr>
-            <tr><td><a href="docs/specs/0003-reminders-schedule.md" class="code-path">0003-reminders-schedule</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>An early combined draft of recurrence + multiple remind times; superseded in scope by 0004 and 0005 below.</td></tr>
-            <tr><td><a href="docs/specs/0004-multiple-notify-times.md" class="code-path">0004-multiple-notify-times</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>More than one notification per reminder, delivered independently.</td></tr>
-            <tr><td><a href="docs/specs/0005-recurring-reminders.md" class="code-path">0005-recurring-reminders</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>Repeating reminders (yearly / weekly), DST-correct per occurrence.</td></tr>
+            <tr><td><a href="docs/specs/0003-reminder-delivery.md" class="code-path">0003-reminder-delivery</a></td><td><span class="badge badge-live">DONE</span></td><td>The Scheduler <span class="mono">/sweep</span>, delivery, and OK / +1h / Tomorrow callbacks (the change reflected across this page).</td></tr>
+            <tr><td><a href="docs/specs/0004-multiple-notify-times.md" class="code-path">0004-multiple-notify-times</a></td><td><span class="badge badge-test">VERIFIED</span></td><td>More than one notification per reminder, each delivered, acked and snoozed independently. Every acceptance criterion passed on the isolated test function and the security pass is clean (see <a href="docs/specs/0004-multiple-notify-times.md" class="code-path">0004-multiple-notify-times.md</a> frontmatter); about to merge to <span class="mono">main</span>.</td></tr>
+            <tr><td><a href="docs/specs/0005-recurring-reminders.md" class="code-path">0005-recurring-reminders</a></td><td><span class="badge badge-planned">READY</span></td><td>Repeating reminders (yearly / weekly), DST-correct per occurrence.</td></tr>
             <tr><td><a href="docs/specs/0006-actor-capture.md" class="code-path">0006-actor-capture</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>Notice a new person named in a reminder, ask about them once, and remember what the user says.</td></tr>
           </tbody>
         </table>
@@ -827,11 +836,20 @@
             <tr><td class="mono">userId, chatId</td><td>Owner and chat, so delivery later knows who and where</td></tr>
             <tr><td class="mono">originalText</td><td>The message exactly as sent - sacred capture, kept even if the interpretation is wrong</td></tr>
             <tr><td class="mono">title, eventAt</td><td>What, and when the event happens; <span class="mono">eventAt</span> is local ISO 8601 with the user's offset</td></tr>
-            <tr><td class="mono">eventAtUtc, remindAt</td><td>The event as a UTC Timestamp; <span class="mono">remindAt</span> starts equal to it, kept separate so a later snooze moves the notification, not the event</td></tr>
+            <tr><td class="mono">eventAtUtc</td><td>The event as a UTC Timestamp, alongside the local-ISO <span class="mono">eventAt</span></td></tr>
             <tr><td class="mono">createdAt</td><td>When it was captured (the same "now" the classifier resolved against)</td></tr>
             <tr><td class="mono">expireAt</td><td>TTL target: <span class="mono">eventAt</span> + 24h, so a stored reminder is reaped after it passes</td></tr>
-            <tr><td class="mono">status</td><td><span class="mono">'scheduled'</span> at creation; the sweep flips it to <span class="mono">sent</span> on delivery, the OK button to <span class="mono">acked</span> (spec 0003, live)</td></tr>
-            <tr><td class="mono">sentAt, ackedAt</td><td>Set by the sweep's claim transaction and by the OK button respectively; present only once a reminder reaches that state</td></tr>
+            <tr><td class="mono">status</td><td>Written <span class="mono">'scheduled'</span> once at creation and never updated since spec 0004 - the retired scalar <span class="mono">remindAt</span> is gone too; delivery state now lives per notification, below, because one reminder can carry several independent nudges</td></tr>
+          </table>
+        </details>
+        <details class="schema-card">
+          <summary>.../reminders/{id}/notifications/{autoId} <span class="badge badge-live">live</span> <span class="mono">projection, spec 0004</span></summary>
+          <table>
+            <tr><td class="mono">at, atLocal</td><td>The instant to fire: a UTC Timestamp plus the canonical local-ISO-with-offset string <span class="mono">eventAt</span> uses</td></tr>
+            <tr><td class="mono">status</td><td><span class="mono">'scheduled'</span> at creation; the sweep flips it to <span class="mono">sent</span> inside a transaction, the OK button to <span class="mono">acked</span> - independently of every other notification on the same reminder</td></tr>
+            <tr><td class="mono">sentAt, ackedAt</td><td>Set by the sweep's claim transaction and by the OK button respectively; present only once this notification reaches that state</td></tr>
+            <tr><td class="mono">reminderId, userId, chatId, title, eventAt</td><td>Denormalised from the parent reminder, so the sweep delivers and the owner check resolves without an extra read</td></tr>
+            <tr><td class="mono">expireAt</td><td>This notification's own TTL (its own <span class="mono">at</span> + 24h) - Firestore does not cascade a parent's delete into a subcollection, so each notification needs its own expiry</td></tr>
           </table>
         </details>
         <details class="schema-card planned">
@@ -870,7 +888,7 @@
         </div>
         <div class="step-row">
           <div class="step-rail"><div class="step-dot">2</div><div class="step-line"></div></div>
-          <div class="step-body"><h4>Reminders</h4><p>Capture and store first (resolve a time, write the record), then the Scheduler sweeper, delivery, snooze / ack buttons, multiple notify times and recurrence.</p><p class="why"><b>Capture and delivery shipped (specs 0002, 0003):</b> reminders resolve to a concrete instant, persist to Firestore, and are delivered by a Cloud Scheduler sweep with OK / +1h / Tomorrow buttons. Multiple notify times (0004) and recurrence (0005) are the remaining parts. First feature needing both stored state and a clock.</p></div>
+          <div class="step-body"><h4>Reminders</h4><p>Capture and store first (resolve a time, write the record), then the Scheduler sweeper, delivery, snooze / ack buttons, multiple notify times and recurrence.</p><p class="why"><b>Capture, delivery and multiple notify times shipped (specs 0002-0004):</b> reminders resolve to a concrete instant, persist to Firestore as one or more independent notifications, and are delivered by a Cloud Scheduler sweep with OK / +1h / Tomorrow buttons acting on each one. 0004 is verified and about to merge. Recurrence (0005) is the remaining part. First feature needing both stored state and a clock.</p></div>
         </div>
         <div class="step-row">
           <div class="step-rail"><div class="step-dot">3</div><div class="step-line"></div></div>
@@ -911,7 +929,7 @@
         <div class="card"><h4>Cloud Build <span class="badge badge-live">live</span></h4><p>Runs <span class="mono">cloudbuild.yaml</span> on every push; the only place <span class="mono">gcloud</span> executes.</p></div>
         <div class="card"><h4>Secret Manager <span class="badge badge-live">live</span></h4><p>Holds the bot token, webhook secret, and allowlist - nothing sensitive in source or in <span class="mono">--set-env-vars</span>.</p></div>
         <div class="card"><h4>Vertex AI - Gemini 3.5 Flash Lite <span class="badge badge-live">live</span></h4><p>Transcription and classification, authenticated as the function's own service account - no API key anywhere.</p></div>
-        <div class="card"><h4>Firestore <span class="badge badge-live">live</span></h4><p>Native mode, <span class="mono">europe-west1</span> - now storing reminders, the memory layer's first collection; the entries log and other projections are still planned. Chosen once and permanent.</p></div>
+        <div class="card"><h4>Firestore <span class="badge badge-live">live</span></h4><p>Native mode, <span class="mono">europe-west1</span> - now storing reminders and their independent per-notification records (spec 0004), the memory layer's first collections; the entries log and other projections are still planned. Chosen once and permanent.</p></div>
         <div class="card"><h4>Cloud Scheduler <span class="badge badge-live">live</span></h4><p>One cron job every 30 minutes, POSTs to the function's own <span class="mono">/sweep</span> to deliver due reminders.</p></div>
         <div class="card planned"><h4>Vertex embeddings <span class="badge badge-planned">planned</span></h4><p><span class="mono">gemini-embedding-001</span>, 768 dimensions, same auth as transcription - topic recall for free-text questions.</p></div>
       </div>
@@ -933,7 +951,7 @@
             <tr><td class="mono">@google-cloud/functions-framework</td><td>Runs the compiled function locally exactly as GCP would invoke it.</td></tr>
             <tr><td class="mono">@google/genai</td><td>Vertex AI client - transcription, classification, and (planned) embeddings all go through this one SDK.</td></tr>
             <tr><td class="mono">axios</td><td>Telegram Bot API calls: sendMessage, getFile, file download.</td></tr>
-            <tr><td class="mono">@google-cloud/firestore</td><td>Firestore client for reminder storage at <span class="mono">users/{userId}/reminders/{autoId}</span>.</td></tr>
+            <tr><td class="mono">@google-cloud/firestore</td><td>Firestore client for reminder storage at <span class="mono">users/{userId}/reminders/{autoId}</span> and its <span class="mono">notifications</span> subcollection.</td></tr>
             <tr><td class="mono">luxon</td><td>Date and time maths: resolving relative dates, offset-aware formatting, the 24h TTL (with <span class="mono">@types/luxon</span>).</td></tr>
             <tr><td class="mono">express</td><td>Underlying HTTP server Nest sits on; deliberately Express 5 despite the framework's Express 4 typings.</td></tr>
             <tr><td class="mono">vitest</td><td>Unit tests for deterministic logic (started with spec 0001-version): commands, the clock override, <span class="mono">eventAt</span> maths, the sweep cutoff, snooze/callback parsing, and the <span class="mono">/sweep</span> auth contract.</td></tr>
@@ -943,7 +961,7 @@
     </section>
 
     <footer>
-      <p>Generated 2026-09-17 from commit <span class="mono">0c18ee8</span> on <span class="mono">main</span>. Source of truth is always the repo, not this page - regenerate after any real architectural change with <span class="mono">/update-architecture-docs</span>.</p>
+      <p>Generated 2026-09-18 from commit <span class="mono">1acc295</span> on <span class="mono">main</span>. Source of truth is always the repo, not this page - regenerate after any real architectural change with <span class="mono">/update-architecture-docs</span>.</p>
     </footer>
 
   </main>

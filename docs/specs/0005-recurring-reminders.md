@@ -1,6 +1,6 @@
 ---
 id: 0005-recurring-reminders
-state: IMPLEMENTED
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0005-recurring-reminders

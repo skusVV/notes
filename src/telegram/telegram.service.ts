@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { ActorsService, firstNewMention, isDeclineReply } from '../actors/actors.service';
 import { ClassifierService } from '../classifier/classifier.service';
 import {
   Classification,
@@ -66,6 +67,27 @@ const HELP_TEXT = [
   '/export - show your stored reminders as JSON',
   '/help - this message',
 ].join('\n');
+
+/**
+ * A stand-in message id, used only when the real `sendMessage` did not come back with one - which
+ * in practice means reflect mode, where a throwaway chat id makes every send fail. The
+ * pending-question flow keys on the id of the question it sent, so it needs one either way; a real
+ * Telegram message id is a small per-chat integer, so starting far above that range keeps a
+ * placeholder distinguishable and unique within this instance.
+ */
+const SYNTHETIC_MESSAGE_ID_BASE = 1_000_000_000;
+let syntheticMessages = 0;
+
+export function syntheticMessageId(): number {
+  syntheticMessages += 1;
+  return SYNTHETIC_MESSAGE_ID_BASE + syntheticMessages;
+}
+
+/** What the reflected webhook response reports when an actor question was asked. */
+export interface ActorQuestion {
+  mention: string;
+  questionMessageId: number;
+}
 
 /** The hour of the local day the `Tomorrow` button snoozes to. */
 export const SNOOZE_TOMORROW_HOUR = 9;
@@ -168,6 +190,7 @@ export class TelegramService {
     private readonly transcription: TranscriptionService,
     private readonly classifier: ClassifierService,
     private readonly reminders: RemindersService,
+    private readonly actors: ActorsService,
     private readonly clock: ClockService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
@@ -250,7 +273,16 @@ export class TelegramService {
   //
   // `nowOverride` is the X-Test-Now value, forwarded only by the test function (same trust boundary
   // as `sink`); it pins "now" for this one update so relative-date resolution is deterministic.
-  async handleUpdate(update: TelegramUpdate, sink?: string[], nowOverride?: string): Promise<void> {
+  //
+  // `actorAsks` is the same trust boundary again: the test function passes one so the reflected
+  // response can report the actor question this update produced, which is the only way a test can
+  // reply to it. Production passes nothing.
+  async handleUpdate(
+    update: TelegramUpdate,
+    sink?: string[],
+    nowOverride?: string,
+    actorAsks?: ActorQuestion[],
+  ): Promise<void> {
     // A delivery button tap arrives as its own update kind, so it is handled before the
     // message branches. It rides the same webhook, so it is already behind the secret check.
     if (update.callback_query) {
@@ -289,6 +321,16 @@ export class TelegramService {
       return;
     }
 
+    // A text reply to the bot's own "who is this?" question is an answer, not a new message, so it
+    // is matched before commands and before classification - otherwise the answer would be filed as
+    // prose. A reply that matches no open question falls straight through to normal handling.
+    if (text && message.reply_to_message && message.from) {
+      const answered = await this.handlePendingReply(message, text, message.from, sender, now, sink);
+      if (answered) {
+        return;
+      }
+    }
+
     // Commands are routed deterministically and never reach the model. Telegram sends /start
     // on first contact, so without this the very first message would be classified as prose.
     if (text?.startsWith('/')) {
@@ -297,13 +339,82 @@ export class TelegramService {
     }
 
     if (voice) {
-      await this.handleVoice(message, voice, sender, now, sink);
+      await this.handleVoice(message, voice, sender, now, sink, actorAsks);
       return;
     }
 
     if (text) {
-      await this.route(message.chat.id, text, message.from, sender, now, undefined, sink);
+      await this.route(
+        message.chat.id,
+        text,
+        message.from,
+        sender,
+        now,
+        undefined,
+        sink,
+        message.message_id,
+        actorAsks,
+      );
     }
+  }
+
+  /**
+   * Handles a reply to the open actor question, and reports whether it was one. Returns false for
+   * every other reply - no open question, an expired one, or a different message id - so an
+   * ordinary message that happens to be a reply is processed normally rather than swallowed.
+   *
+   * Anything that is not one of the decline phrases is stored as what the user said about that
+   * person, verbatim. This is capture, not interpretation: no relation, no aliases, no labels.
+   */
+  private async handlePendingReply(
+    message: TelegramMessage,
+    text: string,
+    from: TelegramUser,
+    sender: string,
+    now: Date,
+    sink?: string[],
+  ): Promise<boolean> {
+    if (!this.actors.available) {
+      return false;
+    }
+
+    const chatId = message.chat.id;
+    let pending;
+    try {
+      pending = await this.actors.getPendingQuestion(from.id, chatId, now);
+    } catch (error) {
+      this.logger.error(`Failed to read the open actor question for ${sender}`, error as Error);
+      return false;
+    }
+
+    if (!pending || pending.questionMessageId !== message.reply_to_message?.message_id) {
+      return false;
+    }
+
+    const declined = isDeclineReply(text);
+    try {
+      if (declined) {
+        await this.actors.decline(from.id, pending.mention);
+      } else {
+        await this.actors.create(from.id, { name: pending.mention, notes: text.trim() }, now);
+      }
+      await this.actors.clearPendingQuestion(from.id, chatId);
+    } catch (error) {
+      // Ids only - never the mention or what the user said about them.
+      this.logger.error(`Failed to answer the actor question for ${sender}`, error as Error);
+      await this.sendMessage(chatId, 'Sorry, I could not save that right now.', sink);
+      return true;
+    }
+
+    this.logger.log(
+      `Answered the actor question for ${sender}: ${declined ? 'declined' : 'actor stored'}`,
+    );
+    await this.sendMessage(
+      chatId,
+      declined ? 'Understood - I will not ask about them again.' : 'Noted, I will remember that.',
+      sink,
+    );
+    return true;
   }
 
   /**
@@ -470,9 +581,10 @@ export class TelegramService {
   }
 
   /**
-   * Dumps the requesting user's stored reminders as one JSON object `{"reminders":[...]}`. Read
-   * back by the verifier over HTTP; assertions are made on this structure, never on reply wording.
-   * The output embeds the user's own words, so it is never logged - only its item count is.
+   * Dumps the requesting user's stored reminders and actors as one JSON object
+   * `{"reminders":[...],"actors":[...]}`. Read back by the verifier over HTTP; assertions are made
+   * on this structure, never on reply wording. The output embeds the user's own words and the names
+   * of real people, so it is never logged - only its item counts are.
    */
   private async handleExport(
     chatId: number,
@@ -489,8 +601,19 @@ export class TelegramService {
       }
     }
 
-    this.logger.log(`Exported ${reminders.length} reminder(s) for ${sender}`);
-    await this.sendMessage(chatId, JSON.stringify({ reminders }), sink);
+    let actors: Awaited<ReturnType<ActorsService['list']>> = [];
+    if (from && this.actors.available) {
+      try {
+        actors = await this.actors.list(from.id);
+      } catch (error) {
+        this.logger.error(`Failed to export actors for ${sender}`, error as Error);
+      }
+    }
+
+    this.logger.log(
+      `Exported ${reminders.length} reminder(s) and ${actors.length} actor(s) for ${sender}`,
+    );
+    await this.sendMessage(chatId, JSON.stringify({ reminders, actors }), sink);
   }
 
   private async handleVoice(
@@ -499,6 +622,7 @@ export class TelegramService {
     sender: string,
     now: Date,
     sink?: string[],
+    actorAsks?: ActorQuestion[],
   ): Promise<void> {
     const chatId = message.chat.id;
 
@@ -551,7 +675,17 @@ export class TelegramService {
     // Voice and text converge here: from this point nothing downstream knows which it was.
     // The transcript is echoed because it is the user's only evidence that speech recognition
     // heard them correctly.
-    await this.route(chatId, transcript, message.from, sender, now, `"${transcript}"`, sink);
+    await this.route(
+      chatId,
+      transcript,
+      message.from,
+      sender,
+      now,
+      `"${transcript}"`,
+      sink,
+      message.message_id,
+      actorAsks,
+    );
   }
 
   /**
@@ -566,6 +700,8 @@ export class TelegramService {
     now: Date,
     prefix?: string,
     sink?: string[],
+    messageId?: number,
+    actorAsks?: ActorQuestion[],
   ): Promise<void> {
     if (!this.classifier.available) {
       this.logger.warn(`Cannot classify for ${sender}: classifier is not configured`);
@@ -574,6 +710,10 @@ export class TelegramService {
     }
 
     const timezone = this.classifier.defaultTimezone;
+    // Who this user already knows, and what they already said is not a person: both are handed to
+    // the model so it does not raise the same name twice. The app-level check in `resolve` is what
+    // actually enforces it - this only saves the model from proposing something pointless.
+    const { knownActors, declinedMentions } = await this.actorContext(from, sender);
     let result: ClassificationResult;
     try {
       if (!prefix) {
@@ -585,11 +725,12 @@ export class TelegramService {
         timezone,
         // The classifier needs the current local time to turn "Thursday" into a real date.
         now: this.clock.formatLocal(now, timezone),
-        // Empty until the rest of Firestore lands. The shape is here now so later specs only fill
-        // it in: known vocabulary is what stops the model inventing a new slug for every wording,
-        // and previousText is the only way a correction can be recognised.
+        // Still empty until the rest of Firestore lands: known vocabulary is what stops the model
+        // inventing a new slug for every wording, and previousText is the only way a correction can
+        // be recognised.
         knownSymptomTypes: [],
-        knownActors: [],
+        knownActors,
+        declinedMentions,
         previousText: undefined,
       });
     } catch (error) {
@@ -609,6 +750,11 @@ export class TelegramService {
     }
 
     let needsClarification = false;
+    // Whether the message produced a reminder at all. The ask flow hangs off that intent alone,
+    // because a reminder is the only thing actually stored for a mention to belong to - and it
+    // hangs off the intent, not off a successful store, since an unresolved time says nothing
+    // about whether the person is new.
+    const hasReminder = result.items.some((item) => item.intent === 'reminder');
     // Whether the reply acted on anything that was NOT a successfully stored reminder. Drives the
     // conditional NOT_STORED_NOTICE: a reply that only stored reminders must not carry it, and it
     // must never falsely claim a store the bot did not make.
@@ -642,6 +788,95 @@ export class TelegramService {
       lines.push('', NOT_STORED_NOTICE);
     }
     await this.sendMessage(chatId, lines.join('\n'), sink);
+
+    // Strictly after the reminder's own reply: asking about a person is a follow-up, and a failure
+    // in it must never delay or replace the confirmation the user is waiting for.
+    if (hasReminder && from && messageId !== undefined) {
+      await this.askAboutNewMention(
+        chatId,
+        messageId,
+        from.id,
+        result.mentions,
+        now,
+        sender,
+        sink,
+        actorAsks,
+      );
+    }
+  }
+
+  /** Known people and declined mentions for the classifier prompt; empty if they cannot be read. */
+  private async actorContext(
+    from: TelegramUser | undefined,
+    sender: string,
+  ): Promise<{ knownActors: { name: string; aliases: string[] }[]; declinedMentions: string[] }> {
+    if (!from || !this.actors.available) {
+      return { knownActors: [], declinedMentions: [] };
+    }
+
+    try {
+      const [knownActors, declinedMentions] = await Promise.all([
+        this.actors.listKnown(from.id),
+        this.actors.listDeclined(from.id),
+      ]);
+      return { knownActors, declinedMentions };
+    } catch (error) {
+      // Degrade to no context rather than failing the message: the worst case is one extra question.
+      this.logger.error(`Failed to read actor context for ${sender}`, error as Error);
+      return { knownActors: [], declinedMentions: [] };
+    }
+  }
+
+  /**
+   * Asks about the first mention this user neither knows nor has declined - at most one question
+   * per message, however many new names it carried. The question is sent as a native Telegram reply
+   * to the user's *own* message, so the answer arrives with a `reply_to_message` the pending
+   * question can be matched by, and the open question is recorded in Firestore rather than in
+   * memory: the instance that asks is not necessarily the one that reads the answer.
+   *
+   * Everything here is best effort. A failure is logged and dropped, never surfaced - the reminder
+   * has already been confirmed by this point.
+   */
+  private async askAboutNewMention(
+    chatId: number,
+    messageId: number,
+    userId: number,
+    mentions: string[],
+    now: Date,
+    sender: string,
+    sink?: string[],
+    actorAsks?: ActorQuestion[],
+  ): Promise<void> {
+    if (!this.actors.available || mentions.length === 0) {
+      return;
+    }
+
+    try {
+      const mention = await firstNewMention(mentions, (candidate) =>
+        this.actors.resolve(userId, candidate),
+      );
+      if (!mention) {
+        return;
+      }
+
+      const questionMessageId = await this.sendMessage(
+        chatId,
+        `I do not know ${mention} yet. Who is that? Tell me anything worth remembering, or say "no" and I will stop asking.`,
+        sink,
+        undefined,
+        messageId,
+      );
+      if (questionMessageId === undefined) {
+        return;
+      }
+
+      await this.actors.setPendingQuestion(userId, chatId, { mention, questionMessageId }, now);
+      // Reflect mode only: the test function's response carries the question so a test can reply
+      // to it. The mention is never logged, only returned to the sender who just said it.
+      actorAsks?.push({ mention, questionMessageId });
+    } catch (error) {
+      this.logger.error(`Failed to ask about a new mention for ${sender}`, error as Error);
+    }
   }
 
   /**
@@ -836,12 +1071,19 @@ export class TelegramService {
     }
   }
 
+  /**
+   * Sends one reply, split into as many Telegram messages as its length needs, and returns the id
+   * of the last one - which is what the actor question is later matched by. `replyToMessageId`
+   * makes every chunk a native Telegram reply to that message. Existing callers ignore the return
+   * value and pass neither extra argument, so their behaviour is unchanged.
+   */
   private async sendMessage(
     chatId: number,
     text: string,
     sink?: string[],
     replyMarkup?: InlineKeyboardMarkup,
-  ): Promise<void> {
+    replyToMessageId?: number,
+  ): Promise<number | undefined> {
     // Deliberately no parse_mode: replies embed the user's own words, and Markdown or HTML
     // would break on any stray underscore or angle bracket in a transcript. Buttons ride on
     // reply_markup instead, which is orthogonal to text formatting.
@@ -854,15 +1096,21 @@ export class TelegramService {
       sink.push(...chunks);
     }
 
+    let messageId: number | undefined;
     for (const [index, chunk] of chunks.entries()) {
       try {
         // The keyboard goes on the last chunk so the buttons sit under the whole message.
         const markup = replyMarkup && index === chunks.length - 1 ? replyMarkup : undefined;
-        await this.api.post('/sendMessage', {
+        const { data } = await this.api.post<TelegramApiResponse<TelegramMessage>>('/sendMessage', {
           chat_id: chatId,
           text: chunk,
           ...(markup ? { reply_markup: markup } : {}),
+          ...(replyToMessageId !== undefined ? { reply_to_message_id: replyToMessageId } : {}),
         });
+        const sent = data?.result?.message_id;
+        // A placeholder when Telegram answered without one, so a caller that needs an id to key on
+        // always gets one.
+        messageId = typeof sent === 'number' ? sent : syntheticMessageId();
       } catch (error) {
         if (!sink) {
           throw error;
@@ -870,7 +1118,12 @@ export class TelegramService {
         this.logger.warn(
           `reflect: sendMessage to chat ${chatId} failed: ${(error as Error).message}`,
         );
+        // Reflect mode only: the send failed because the chat id is a throwaway, so there is no
+        // real id to return. A local one keeps the pending-question flow deterministic under test.
+        messageId = syntheticMessageId();
       }
     }
+
+    return messageId;
   }
 }

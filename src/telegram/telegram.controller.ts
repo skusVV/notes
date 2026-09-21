@@ -12,7 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'node:crypto';
 import { ClockService } from '../clock/clock.service';
 import { SweeperService } from './sweeper.service';
-import { TelegramService } from './telegram.service';
+import { ActorQuestion, TelegramService } from './telegram.service';
 import { TelegramUpdate } from './telegram.types';
 
 @Controller()
@@ -37,7 +37,7 @@ export class TelegramController {
     @Headers('x-telegram-bot-api-secret-token') secret: string | undefined,
     @Headers('x-test-now') testNow: string | undefined,
     @Body() update: TelegramUpdate,
-  ): Promise<{ ok: boolean; replies?: string[] }> {
+  ): Promise<{ ok: boolean; replies?: string[]; actorQuestion?: ActorQuestion }> {
     this.assertSecret(secret);
 
     // Reflect mode is set only on the test function (TEST_REFLECT_REPLY=true). When on, collect the
@@ -50,14 +50,26 @@ export class TelegramController {
     // trust boundary as reply reflection. Production has TEST_REFLECT_REPLY=false, so it is ignored.
     const nowOverride = reflect ? testNow?.trim() || undefined : undefined;
 
+    // Same trust boundary again: collects the actor question this update asked, if any, so a test
+    // can reply to it by message id. There is at most one per update.
+    const actorAsks: ActorQuestion[] | undefined = reflect ? [] : undefined;
+
     try {
-      await this.telegram.handleUpdate(update, sink, nowOverride);
+      await this.telegram.handleUpdate(update, sink, nowOverride, actorAsks);
     } catch (error) {
       // Always answer 200 so Telegram does not retry the same update forever.
       this.logger.error(`Failed to handle update ${update?.update_id}`, error as Error);
     }
 
-    return sink ? { ok: true, replies: sink } : { ok: true };
+    if (!sink) {
+      return { ok: true };
+    }
+
+    // The key is absent, not null, when no question was asked - "no actorQuestion at all" is what
+    // proves a mention was never raised.
+    return actorAsks?.length
+      ? { ok: true, replies: sink, actorQuestion: actorAsks[0] }
+      : { ok: true, replies: sink };
   }
 
   /**

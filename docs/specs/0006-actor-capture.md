@@ -1,6 +1,6 @@
 ---
 id: 0006-actor-capture
-state: READY
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0006-actor-capture

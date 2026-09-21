@@ -40,7 +40,11 @@ const RESPONSE_SCHEMA: Schema = {
       type: Type.ARRAY,
       items: { type: Type.STRING },
       description:
-        'People referred to, as the exact words used ("my wife", "Andriy"). Empty if none.',
+        'People referred to, each in its BASE DICTIONARY FORM - nominative case, no grammatical ' +
+        'inflection ("Антона" -> "Антон", "Олені" -> "Олена"). Include someone only if they could ' +
+        'plausibly be a specific, recurring person: a proper name, or a personal/relational ' +
+        'reference ("my wife", "сусідка"). Never a generic professional or service role (doctor, ' +
+        'taxi driver, cashier, plumber). Empty if none.',
     },
     keywords: {
       type: Type.ARRAY,
@@ -378,6 +382,19 @@ export class ClassifierService {
       '- "Take out the trash every Monday at 8am" -> recurrence = {freq: weekly, weekday: monday,',
       '  atLocal: "08:00"}, no eventAt.',
       '',
+      'People (mentions). The bot asks the user once about someone it does not know yet, so this',
+      'list decides who it asks about. Rules:',
+      '- Write each person in their BASE DICTIONARY FORM: nominative case, no grammatical',
+      '  inflection, whatever case the sentence used. "привітати Антона" -> "Антон";',
+      '  "подзвонити Олені" -> "Олена"; "передати документи Марії" -> "Марія".',
+      '- Include someone only when they could plausibly be the same specific person every time: a',
+      '  proper name, or a personal/relational reference (family, a friend, a neighbour, a named',
+      '  colleague).',
+      '- Never include a generic professional or service role with no ongoing relationship - лікар/',
+      '  doctor, taxi driver, cashier, plumber, hairdresser. That is a different, unnamed person',
+      '  each time, and asking about them is noise.',
+      '- Never list anyone already named under "Known people" or "Declined mentions" below.',
+      '',
       'Rules that matter more than being helpful:',
       '- Omit any field the user did not actually state. An absent value is correct; a guessed',
       '  value is a silent error the user will not notice for weeks.',
@@ -399,7 +416,16 @@ export class ClassifierService {
       const described = actors
         .map((a) => (a.aliases.length > 0 ? `${a.name} (${a.aliases.join(', ')})` : a.name))
         .join('; ');
-      parts.push('', `Known people: ${described}.`);
+      parts.push('', `Known people (never list these in mentions again): ${described}.`);
+    }
+
+    const declined = context.declinedMentions?.filter(Boolean) ?? [];
+    if (declined.length > 0) {
+      parts.push(
+        '',
+        'Declined mentions - the user has said these are not a person worth tracking, so never ' +
+          `list them in mentions: ${declined.join(', ')}.`,
+      );
     }
 
     if (context.previousText) {

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ActorsModule } from '../actors/actors.module';
 import { ClassifierModule } from '../classifier/classifier.module';
 import { ClockModule } from '../clock/clock.module';
 import { RemindersModule } from '../reminders/reminders.module';
@@ -8,7 +9,7 @@ import { TelegramController } from './telegram.controller';
 import { TelegramService } from './telegram.service';
 
 @Module({
-  imports: [TranscriptionModule, ClassifierModule, RemindersModule, ClockModule],
+  imports: [TranscriptionModule, ClassifierModule, RemindersModule, ActorsModule, ClockModule],
   controllers: [TelegramController],
   providers: [TelegramService, SweeperService],
 })

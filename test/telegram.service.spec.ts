@@ -34,6 +34,7 @@ function makeService(): TelegramService {
   const transcription = { available: false } as unknown;
   const classifier = { available: false } as unknown;
   const reminders = { available: false } as unknown;
+  const actors = { available: false } as unknown;
   const clock = new ClockService();
 
   return new TelegramService(
@@ -41,6 +42,7 @@ function makeService(): TelegramService {
     transcription as never,
     classifier as never,
     reminders as never,
+    actors as never,
     clock,
   );
 }

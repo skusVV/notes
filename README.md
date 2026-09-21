@@ -194,6 +194,12 @@ Reminders are stored in Firestore, so create two databases and grant access.
    Both policies are needed because Firestore does **not** cascade a delete into subcollections: a
    reaped reminder would otherwise leave its notifications behind, still due.
 
+   Add a **third** policy on each database the same way, with collection group **`pending`** and
+   timestamp field **`expiresAt`**. That one holds the single open "who is this person?" question
+   per chat, which sets `expiresAt` to 24 hours after it was asked: a question nobody answers
+   disappears on its own instead of sitting there forever. The bot also ignores an expired question
+   itself, so a late TTL run only delays the cleanup, never the behaviour.
+
    **Recurring reminders are exempt by design, and need no Console change.** A recurring reminder -
    a birthday, "every Monday at 8am" - is written with **no** `expireAt` field at all, and neither
    are its notifications. A TTL policy only deletes documents where its timestamp field is present,
@@ -372,8 +378,8 @@ you open the page.
 - **Reminders are captured, resolved, and stored.** The classifier is told the current local time,
   so "haircut on Thursday at 12" is resolved to a concrete instant and written to
   `users/{userId}/reminders/{autoId}`. A reminder that names no clear time is **not** stored - the
-  bot asks rather than guessing. `/export` replies with the requesting user's stored reminders as a
-  single JSON object `{"reminders":[...]}`.
+  bot asks rather than guessing. `/export` replies with the requesting user's stored reminders and
+  people as a single JSON object `{"reminders":[...],"actors":[...]}`.
 - **One reminder can have several notify times.** "I have a doctor appointment on the 22nd at 2PM,
   remind me the evening before and the morning of" is one appointment with **two** nudges: the
   reminder keeps a single `eventAt`, and each nudge is its own document under
@@ -393,6 +399,16 @@ you open the page.
   happens, is never rewritten, and the reminder's other nudges still fire as scheduled. Taps arrive
   on the same webhook, so they pass the same secret check and the same `ALLOWED_USERS` gate, and a
   notification can only be moved by the user who created it.
+- **A new person in a reminder is asked about once.** When a reminder names somebody the bot does
+  not know yet - a proper name or a relation, never a generic role like "the doctor" - it replies to
+  your message asking who that is. Whatever you answer is stored verbatim as that person's notes
+  under `users/{userId}/actors/{autoId}`; answering "no" (or `ні`, `нет`, `не`, `nope`, ...) records
+  the decline instead, and neither the person nor the decline is ever asked about again. Only one
+  question is asked per message however many new names it carried, the open question lives in
+  Firestore (`users/{userId}/pending/{chatId}`, expiring after 24h) rather than in memory, and a
+  reply that matches no open question is handled as an ordinary new message. Names are normalised to
+  their dictionary form by the classifier, so "Антона" and "Антону" both resolve to "Антон".
+
 - **`X-Test-Now` is test-only.** On the test function (`TEST_REFLECT_REPLY=true`) an
   `X-Test-Now: 2026-09-16T09:00:00+03:00` header pins "now" for that one request, so relative-date
   resolution is deterministic in verification. Production has reflection off and ignores the header

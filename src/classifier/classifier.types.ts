@@ -79,7 +79,12 @@ export interface ClassificationResult {
   items: Classification[];
   /** BCP-47-ish tag of the message language, so replies can match it later. */
   language: string;
-  /** Raw person surface forms as spoken ("my wife", "Andriy"). Captured before actors exist. */
+  /**
+   * People referred to, in base dictionary form ("Антона" -> "Антон", "my wife"), not the surface
+   * form as spoken: Ukrainian and Russian inflect a name by case, so two mentions of one person
+   * would otherwise never match each other. The message itself is kept verbatim in the reminder's
+   * `originalText`, so nothing is lost by normalising here.
+   */
   mentions: string[];
   /** Proper nouns and rare terms, for the keyword half of hybrid retrieval later. */
   keywords: string[];
@@ -98,6 +103,11 @@ export interface ClassifierContext {
   knownSymptomTypes?: string[];
   /** Existing people and the forms used for them, so mentions resolve to one actor. */
   knownActors?: { name: string; aliases: string[] }[];
+  /**
+   * Normalised (lowercase, trimmed) forms the user has already said are not a person worth
+   * tracking. A second reason a mention must not be repeated, alongside `knownActors`.
+   */
+  declinedMentions?: string[];
   /** The user's previous message, which is the only way `correction` can be detected. */
   previousText?: string;
 }

@@ -24,6 +24,12 @@ export interface TelegramMessage {
   from?: TelegramUser;
   text?: string;
   voice?: TelegramVoice;
+  /**
+   * The message this one is a native Telegram reply to. Only the id is modelled: it is how an
+   * answer to the bot's "who is this?" question is recognised as an answer rather than a new
+   * message. Telegram sends the whole quoted message here; the rest is not needed.
+   */
+  reply_to_message?: { message_id: number };
 }
 
 /** One tappable button. `callback_data` is capped by Telegram at 64 bytes. */

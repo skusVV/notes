@@ -1,6 +1,6 @@
 ---
 id: 0006-actor-capture
-state: IMPLEMENTED
+state: IN-TESTING
 attempt: 0
 max_attempts: 3
 branch: feat/0006-actor-capture

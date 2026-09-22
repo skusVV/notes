@@ -150,9 +150,17 @@ const RESPONSE_SCHEMA: Schema = {
                       `named no time - the bot then uses ${DEFAULT_RECURRENCE_HOUR}:00 local. Do ` +
                       'not invent an hour.',
                   },
+                  evidence: {
+                    type: Type.STRING,
+                    description:
+                      'The exact words from the user\'s own message that say this repeats, ' +
+                      'quoted verbatim - "every Monday", "щодня", "every year on". For a ' +
+                      'birthday or anniversary, quote the phrase naming it as one. If there is ' +
+                      'no real phrase to quote, do not add a recurrence object at all.',
+                  },
                 },
-                required: ['freq'],
-                propertyOrdering: ['freq', 'month', 'day', 'weekday', 'atLocal'],
+                required: ['freq', 'evidence'],
+                propertyOrdering: ['freq', 'month', 'day', 'weekday', 'atLocal', 'evidence'],
               },
             },
             required: ['title', 'hasTimeOfDay'],
@@ -375,7 +383,13 @@ export class ClassifierService {
       `  resolves each occurrence itself and uses ${DEFAULT_RECURRENCE_HOUR}:00 local when no time`,
       '  was stated, so there is no hour to guess.',
       '- A one-off stays a one-off. "remind me on Monday at 8" is NOT weekly. Nothing about a',
-      '  routine-sounding message makes it a repeat - only explicit repeating words do.',
+      '  routine-sounding message makes it a repeat - only explicit repeating words do. A message',
+      '  about a routine ACTION ("wife needs to take her pills", "I need to water the plants") is a',
+      '  one-off unless it also names a repeat - the action being the kind of thing someone might',
+      '  repeat daily is not the same as the user having asked for it daily.',
+      '- Every recurrence must carry `evidence`: the exact words, quoted from the message, that say',
+      '  it repeats. This is checked against the message text - a quote that is not really there',
+      '  gets the whole recurrence discarded, so do not fill it with a paraphrase.',
       'Examples:',
       '- "Bob has a birthday on June 12" -> reminder, title "Bob\'s birthday",',
       '  recurrence = {freq: yearly, month: 6, day: 12}, no eventAt, no atLocal.',
@@ -480,7 +494,7 @@ export class ClassifierService {
     const root = parsed as Record<string, unknown> | null;
     const rawItems = Array.isArray(root?.items) ? root.items : [];
     const items = rawItems
-      .map((item) => this.coerceItem(item, now, timezone))
+      .map((item) => this.coerceItem(item, original, now, timezone))
       .filter((item): item is Classification => item !== undefined);
 
     if (items.length === 0) {
@@ -496,7 +510,12 @@ export class ClassifierService {
     };
   }
 
-  private coerceItem(value: unknown, now: Date, timezone: string): Classification | undefined {
+  private coerceItem(
+    value: unknown,
+    original: string,
+    now: Date,
+    timezone: string,
+  ): Classification | undefined {
     const raw = value as Record<string, unknown> | null;
     if (!raw || typeof raw.intent !== 'string') {
       return undefined;
@@ -519,6 +538,15 @@ export class ClassifierService {
     const reminder = raw.reminder as Record<string, unknown> | undefined;
     if (intent === 'reminder' && typeof reminder?.title === 'string' && reminder.title.trim()) {
       const notifyAt = stringArray(reminder.notifyAt);
+      // A rule the resolver cannot compute occurrences for is dropped, not repaired: half a
+      // recurrence ("weekly", no weekday) would have to be invented to be usable, and an
+      // invented repeat fires forever at a time the user never named. Likewise a recurrence whose
+      // `evidence` is not real text from the message - "sounds routine" is not the same as
+      // "the user asked for it daily", and only the latter should fire forever.
+      const recurrence = normalizeRecurrence(reminder.recurrence, timezone, original);
+      if (reminder.recurrence && !recurrence) {
+        this.logger.warn('Classifier recurrence rejected: unresolvable or not quoted from the message');
+      }
       item.reminder = {
         title: reminder.title.trim(),
         eventAt: optionalString(reminder.eventAt),
@@ -526,10 +554,7 @@ export class ClassifierService {
         // "named no notify time", and the store resolves the latter to one nudge at eventAt.
         notifyAt: notifyAt.length > 0 ? notifyAt : undefined,
         leadMinutes: optionalInt(reminder.leadMinutes),
-        // A rule the resolver cannot compute occurrences for is dropped, not repaired: half a
-        // recurrence ("weekly", no weekday) would have to be invented to be usable, and an
-        // invented repeat fires forever at a time the user never named.
-        recurrence: normalizeRecurrence(reminder.recurrence, timezone),
+        recurrence,
       };
     }
 

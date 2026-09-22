@@ -75,8 +75,18 @@ function maxDayOfMonth(month: number): number {
  *
  * The one default applied is the time of day: an all-day recurring event (a birthday) fires at
  * {@link DEFAULT_RECURRENCE_HOUR}, which the spec fixes rather than leaving to the model.
+ *
+ * `originalText`, when given, gates the rule on `raw.evidence` being real words quoted from the
+ * message rather than trusted outright - the model has repeated a "this sounds routine" judgement
+ * into a recurrence it was explicitly told not to invent, so the same judgement asking itself
+ * "did I quote something real?" is not a safeguard. Omitted when re-validating a rule already read
+ * back from storage, which never carried an `evidence` field to check.
  */
-export function normalizeRecurrence(value: unknown, timezone: string): Recurrence | undefined {
+export function normalizeRecurrence(
+  value: unknown,
+  timezone: string,
+  originalText?: string,
+): Recurrence | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
   }
@@ -84,6 +94,10 @@ export function normalizeRecurrence(value: unknown, timezone: string): Recurrenc
   const raw = value as Record<string, unknown>;
   const freq = typeof raw.freq === 'string' ? raw.freq.trim().toLowerCase() : '';
   if (!isFreq(freq)) {
+    return undefined;
+  }
+
+  if (originalText !== undefined && !isQuotedFrom(raw.evidence, originalText)) {
     return undefined;
   }
 
@@ -135,6 +149,16 @@ function normalizeAtLocal(value: unknown): string | undefined {
   }
 
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/** A verbatim substring check, not a semantic one: it can't tell a real quote from a coincidental
+ * one, but it does make bare invention impossible - the model must ground its claim in text that
+ * is actually there. */
+function isQuotedFrom(evidence: unknown, originalText: string): boolean {
+  if (typeof evidence !== 'string' || !evidence.trim()) {
+    return false;
+  }
+  return originalText.toLowerCase().includes(evidence.trim().toLowerCase());
 }
 
 function wholeNumber(value: unknown): number | undefined {

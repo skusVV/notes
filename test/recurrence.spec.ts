@@ -181,16 +181,33 @@ describe('nextOccurrenceAfter', () => {
 });
 
 describe('describeRecurrence', () => {
-  it('renders each frequency for a reply', () => {
-    expect(describeRecurrence(rule({ freq: 'daily' }))).toBe('every day at 09:00');
+  // acceptance: recurrence-humanised - each frequency renders in Ukrainian, time via humanizeTimeOfDay
+  it('renders each frequency in Ukrainian for a reply', () => {
+    expect(describeRecurrence(rule({ freq: 'daily', atLocal: '20:00' }))).toBe('щодня о 20:00');
     expect(describeRecurrence(rule({ freq: 'weekly', weekday: 'monday', atLocal: '08:00' }))).toBe(
-      'every monday at 08:00',
+      'щопонеділка о 8:00',
     );
-    expect(describeRecurrence(rule({ freq: 'monthly', day: 1 }))).toBe(
-      'every month on day 1 at 09:00',
-    );
+    expect(describeRecurrence(rule({ freq: 'monthly', day: 1 }))).toBe('щомісяця 1 числа о 9:00');
     expect(describeRecurrence(rule({ freq: 'yearly', month: 6, day: 12 }))).toBe(
-      'every year on June 12 at 09:00',
+      'щороку 12 червня о 9:00',
     );
+  });
+
+  it('names every weekday', () => {
+    const expected: Record<string, string> = {
+      monday: 'щопонеділка',
+      tuesday: 'щовівторка',
+      wednesday: 'щосереди',
+      thursday: 'щочетверга',
+      friday: "щоп'ятниці",
+      saturday: 'щосуботи',
+      sunday: 'щонеділі',
+    };
+
+    for (const [weekday, word] of Object.entries(expected)) {
+      expect(
+        describeRecurrence(rule({ freq: 'weekly', weekday: weekday as never, atLocal: '08:00' })),
+      ).toBe(`${word} о 8:00`);
+    }
   });
 });

@@ -120,7 +120,7 @@ export class SweeperService {
           continue;
         }
 
-        await this.telegram.sendReminder(notification, sink);
+        await this.telegram.sendReminder(notification, now, sink);
         sent += 1;
       } catch (error) {
         // Ids and counts only - the reminder's text is the user's private note.

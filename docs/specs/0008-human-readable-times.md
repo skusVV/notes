@@ -1,6 +1,6 @@
 ---
 id: 0008-human-readable-times
-state: READY
+state: IMPLEMENTED
 attempt: 0
 max_attempts: 3
 branch: feat/0008-human-readable-times

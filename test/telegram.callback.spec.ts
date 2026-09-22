@@ -107,6 +107,8 @@ describe('reminderKeyboard', () => {
   it('offers the three buttons, each well under Telegram\'s 64-byte callback_data limit', () => {
     const [row] = reminderKeyboard(NOTIFICATION_ID).inline_keyboard;
 
+    // Labels are Ukrainian; the callback_data is unchanged so already-delivered messages keep working.
+    expect(row.map((button) => button.text)).toEqual(['Готово', '+1 год', 'Завтра']);
     expect(row.map((button) => button.callback_data)).toEqual([
       `rem:ok:${NOTIFICATION_ID}`,
       `rem:1h:${NOTIFICATION_ID}`,
@@ -129,8 +131,9 @@ describe('TelegramService callback handling', () => {
   // document, so no other notification of the same reminder is touched and no time moves
   it('acks exactly the tapped notification on OK, moving no time', async () => {
     const service = makeService(reminders);
+    const replies: string[] = [];
 
-    await service.handleUpdate(tap('ok', OWNER), [], '2026-09-16T10:05:00+03:00');
+    await service.handleUpdate(tap('ok', OWNER), replies, '2026-09-16T10:05:00+03:00');
 
     expect(reminders.ackNotification).toHaveBeenCalledWith(
       NOTIFICATION_REF,
@@ -138,6 +141,18 @@ describe('TelegramService callback handling', () => {
       expect.any(Date),
     );
     expect(reminders.snoozeNotification).not.toHaveBeenCalled();
+    // The OK toast is Ukrainian.
+    expect(replies).toEqual(['Готово.']);
+  });
+
+  // acceptance: snooze-toast-humanised - the Tomorrow toast is a relative phrase, never an ISO time
+  it('humanises the Tomorrow snooze toast rather than showing an ISO time', async () => {
+    const service = makeService(reminders);
+    const replies: string[] = [];
+
+    await service.handleUpdate(tap('tmrw', OWNER), replies, '2026-09-21T19:45:00+03:00');
+
+    expect(replies).toEqual(['Нагадаю ще раз завтра о 9:00.']);
   });
 
   // acceptance: snooze-moves-only-that-notification - that notification's `at` becomes tap + 1h

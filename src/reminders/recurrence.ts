@@ -1,4 +1,5 @@
 import { DateTime, WeekdayNumbers } from 'luxon';
+import { humanizeTimeOfDay, MONTHS_GENITIVE } from './humanize-time';
 
 /**
  * The recurrence rules v1 understands. Deliberately a short, closed set on a fixed day and time:
@@ -262,34 +263,31 @@ function isAtOrAfter(candidate: DateTime, from: Date, strict: boolean): boolean 
 }
 
 /**
- * A one-line, human rendering of a rule for a reply ("every year on June 12 at 09:00"). Reply
- * wording only - never parsed back, and never the stored form.
+ * A one-line Ukrainian rendering of a rule for a reply ("щороку 12 червня о 9:00"). Reply wording
+ * only - never parsed back, and never the stored form. The time goes through humanizeTimeOfDay so
+ * the same 'о'/'об' rule as every other reply applies.
  */
 export function describeRecurrence(recurrence: Recurrence): string {
-  const at = ` at ${recurrence.atLocal}`;
+  const at = ` ${humanizeTimeOfDay(recurrence.atLocal)}`;
   switch (recurrence.freq) {
     case 'daily':
-      return `every day${at}`;
+      return `щодня${at}`;
     case 'weekly':
-      return `every ${recurrence.weekday}${at}`;
+      return `${WEEKDAYS_UK[recurrence.weekday ?? 'monday']}${at}`;
     case 'monthly':
-      return `every month on day ${recurrence.day}${at}`;
+      return `щомісяця ${recurrence.day} числа${at}`;
     case 'yearly':
-      return `every year on ${MONTH_NAMES[(recurrence.month ?? 1) - 1]} ${recurrence.day}${at}`;
+      return `щороку ${recurrence.day} ${MONTHS_GENITIVE[(recurrence.month ?? 1) - 1]}${at}`;
   }
 }
 
-const MONTH_NAMES = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-];
+/** How each weekday reads in "every <weekday>": genitive/adverbial forms after "що". */
+const WEEKDAYS_UK: Record<Weekday, string> = {
+  monday: 'щопонеділка',
+  tuesday: 'щовівторка',
+  wednesday: 'щосереди',
+  thursday: 'щочетверга',
+  friday: "щоп'ятниці",
+  saturday: 'щосуботи',
+  sunday: 'щонеділі',
+};

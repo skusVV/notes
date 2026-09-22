@@ -15,6 +15,7 @@ import {
 import { ClockService } from '../clock/clock.service';
 import { NotesService } from '../notes/notes.service';
 import { normalizeEventAt } from '../reminders/event-at';
+import { humanizeInstant } from '../reminders/humanize-time';
 import { describeRecurrence, nextOccurrence } from '../reminders/recurrence';
 import {
   DueNotification,
@@ -65,7 +66,7 @@ const HELP_TEXT = [
   '',
   'I work out which one it is and show you what I understood.',
   'Reminders with a clear date and time are saved, and stray notes are kept too; other kinds are not kept yet.',
-  'When a reminder is due I send it with OK / +1h / Tomorrow buttons.',
+  'When a reminder is due I send it with Готово / +1 год / Завтра buttons.',
   '',
   '/export - show your stored reminders and notes as JSON',
   '/help - this message',
@@ -137,9 +138,9 @@ export function reminderKeyboard(id: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
-        { text: 'OK', callback_data: `${CALLBACK_PREFIX}:ok:${id}` },
-        { text: '+1h', callback_data: `${CALLBACK_PREFIX}:1h:${id}` },
-        { text: 'Tomorrow', callback_data: `${CALLBACK_PREFIX}:tmrw:${id}` },
+        { text: 'Готово', callback_data: `${CALLBACK_PREFIX}:ok:${id}` },
+        { text: '+1 год', callback_data: `${CALLBACK_PREFIX}:1h:${id}` },
+        { text: 'Завтра', callback_data: `${CALLBACK_PREFIX}:tmrw:${id}` },
       ],
     ],
   };
@@ -426,10 +427,10 @@ export class TelegramService {
    * ever for a notification it has already claimed, so this method never decides whether to
    * deliver. The keyboard keys on the notification id, so a tap moves this nudge and no other.
    */
-  async sendReminder(notification: DueNotification, sink?: string[]): Promise<void> {
-    const lines = [`Reminder: ${notification.title}`];
+  async sendReminder(notification: DueNotification, now: Date, sink?: string[]): Promise<void> {
+    const lines = [`Нагадування: ${notification.title}`];
     if (notification.eventAt) {
-      lines.push(`when: ${notification.eventAt}`);
+      lines.push(humanizeInstant(notification.eventAt, now));
     }
 
     await this.sendMessage(
@@ -510,7 +511,7 @@ export class TelegramService {
 
     if (action === 'ok') {
       await this.reminders.ackNotification(owned.ref, userId, now);
-      await this.answerCallback(query.id, 'Done.', sink);
+      await this.answerCallback(query.id, 'Готово.', sink);
       // Best effort: the notification is already acked, so a failure here is cosmetic.
       await this.removeKeyboard(query.message);
       return;
@@ -523,7 +524,11 @@ export class TelegramService {
     const atLocal = this.clock.formatLocal(at, timezone);
 
     await this.reminders.snoozeNotification(owned.ref, userId, at, atLocal, owned.recurring);
-    await this.answerCallback(query.id, `I will remind you again at ${atLocal}.`, sink);
+    await this.answerCallback(
+      query.id,
+      `Нагадаю ще раз ${humanizeInstant(atLocal, now, { capitalize: false })}.`,
+      sink,
+    );
   }
 
   /** Stops Telegram's spinner on the tapped button. Reflected too, so a test can read the outcome. */
@@ -799,7 +804,7 @@ export class TelegramService {
       }
 
       hasUnstored = true;
-      lines.push(this.describeItem(item, result));
+      lines.push(this.describeItem(item, result, now));
     }
 
     if (needsClarification) {
@@ -918,12 +923,12 @@ export class TelegramService {
     const reminder = item.reminder;
     if (!reminder) {
       // Should not happen above CONFIDENCE_ASK, but never invent a store if it does.
-      return { text: this.describeReminder(item), stored: false };
+      return { text: this.describeReminder(item, now), stored: false };
     }
 
     if (!from || !this.reminders.available) {
       return {
-        text: `${this.describeReminder(item)}\nI could not store this reminder right now.`,
+        text: `${this.describeReminder(item, now)}\nНе вдалося зберегти це нагадування зараз.`,
         stored: false,
       };
     }
@@ -943,7 +948,7 @@ export class TelegramService {
       );
       if (!id) {
         return {
-          text: `${this.describeReminder(item)}\nI could not work out a clear time, so I did not store it.`,
+          text: `${this.describeReminder(item, now)}\nНе зрозумів точний час, тому не зберіг.`,
           stored: false,
         };
       }
@@ -953,15 +958,15 @@ export class TelegramService {
       const resolved = reminder.recurrence
         ? (nextOccurrence(reminder.recurrence, now) ?? '')
         : (normalizeEventAt(reminder.eventAt, now) ?? reminder.eventAt ?? '');
-      const lines = [`Reminder saved: ${reminder.title}`, `when: ${resolved}`];
+      const lines = [`Нагадування збережено: ${reminder.title}`, humanizeInstant(resolved, now)];
       if (reminder.recurrence) {
-        lines.push(`repeats: ${describeRecurrence(reminder.recurrence)}`);
+        lines.push(`Повторюється: ${describeRecurrence(reminder.recurrence)}`);
       }
       return { text: lines.join('\n'), stored: true };
     } catch (error) {
       this.logger.error(`Failed to store reminder for ${sender}`, error as Error);
       return {
-        text: `${this.describeReminder(item)}\nI could not store this reminder right now.`,
+        text: `${this.describeReminder(item, now)}\nНе вдалося зберегти це нагадування зараз.`,
         stored: false,
       };
     }
@@ -1003,7 +1008,7 @@ export class TelegramService {
     // No user, store unavailable, or a create failure: fall back to the preview wording (which reads
     // correctly as a preview, not a confirmation) and say plainly it was not kept.
     return {
-      text: `${this.describeItem(item, result)}\nI could not store this note right now.`,
+      text: `${this.describeItem(item, result, now)}\nI could not store this note right now.`,
       stored: false,
     };
   }
@@ -1012,10 +1017,10 @@ export class TelegramService {
    * One branch per intent. Each of these becomes a write once Firestore exists; for now the
    * branch is where the reply is composed, so the routing itself is observable.
    */
-  private describeItem(item: Classification, result: ClassificationResult): string {
+  private describeItem(item: Classification, result: ClassificationResult, now: Date): string {
     switch (item.intent) {
       case 'reminder':
-        return this.describeReminder(item);
+        return this.describeReminder(item, now);
       case 'symptom':
         return this.describeSymptom(item);
       case 'question':
@@ -1039,21 +1044,21 @@ export class TelegramService {
     }
   }
 
-  private describeReminder(item: Classification): string {
+  private describeReminder(item: Classification, now: Date): string {
     const reminder = item.reminder;
     if (!reminder) {
-      return this.withConfidence(`Reminder: ${item.summary}`, item);
+      return this.withConfidence(`Нагадування: ${item.summary}`, item);
     }
 
-    const details: string[] = [`Reminder: ${reminder.title}`];
-    details.push(reminder.eventAt ? `when: ${reminder.eventAt}` : 'when: not stated');
+    const details: string[] = [`Нагадування: ${reminder.title}`];
+    details.push(reminder.eventAt ? humanizeInstant(reminder.eventAt, now) : 'Час не вказано');
     details.push(
       reminder.leadMinutes === undefined
-        ? 'lead time: not stated, I would ask'
-        : `lead time: ${reminder.leadMinutes} min before`,
+        ? 'Час попередження не вказано, я перепитаю'
+        : `Нагадати за ${reminder.leadMinutes} хв до події`,
     );
     if (reminder.recurrence) {
-      details.push(`repeats: ${describeRecurrence(reminder.recurrence)}`);
+      details.push(`Повторюється: ${describeRecurrence(reminder.recurrence)}`);
     }
 
     return this.withConfidence(details.join('\n'), item);

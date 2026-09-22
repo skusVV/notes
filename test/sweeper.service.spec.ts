@@ -135,6 +135,8 @@ describe('SweeperService.sweep', () => {
     expect(sent).toBe(1);
     expect(reminders.findDue).toHaveBeenCalledWith(new Date(NOW.getTime() + 30 * 60_000));
     expect(telegram.sendReminder.mock.calls.map((call) => call[0].id)).toEqual(['due-in-15']);
+    // The sweeper hands its own "now" to sendReminder so the delivery phrase is pinned to it.
+    expect(telegram.sendReminder.mock.calls[0][1]).toBe(NOW);
     expect(store.find((n) => n.id === 'due-in-15')?.status).toBe('sent');
     expect(store.find((n) => n.id === 'due-in-75')?.status).toBe('scheduled');
   });

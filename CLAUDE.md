@@ -153,6 +153,16 @@ checked before the download for the same reason. The size cap is 15 MB, not 20 M
 **Replies are chunked.** `sendMessage` splits at 4096 characters because Telegram rejects anything
 longer and a few minutes of speech transcribes past it. Keep new outbound text going through it.
 
+**No raw timestamp ever reaches the chat.** Every time the bot shows a user a time it goes through
+`humanizeInstant` / `humanizeTimeOfDay`
+([src/reminders/humanize-time.ts](src/reminders/humanize-time.ts)), which render an ISO instant as
+`Сьогодні о 20:00` / `Завтра об 11:00` / `25 вересня о 20:00`. Canonical ISO is the **storage**
+form and stays inside Firestore, `/export` and the logs; it is not a thing a person reads. A new
+reply that names a time calls the helper - it never interpolates `eventAt`, `atLocal` or a
+`Date`. The helper is pure and takes `now` as an argument, so nothing in it reads a clock and a
+test that pins `X-Test-Now` still pins the whole rendering. It never invents a time: a value it
+cannot parse is returned unchanged, the same discipline as `normalizeEventAt`.
+
 **Webhook response contract** ([src/telegram/telegram.controller.ts](src/telegram/telegram.controller.ts)):
 a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never processed (timing-safe
 compare); everything else gets `200` even when handling throws, so Telegram does not retry the same

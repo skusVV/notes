@@ -16,7 +16,7 @@ acceptance:
   - id: reminder-not-double-stored
     assert: "With X-Test-Now=2026-09-16T09:00:00+03:00, POST 'Remind me to call the doctor tomorrow at 10am' from user id U42; a '/export' from U42 shows exactly one reminder and notes == []"
   - id: export-empty-shape
-    assert: "A '/export' command update from a user id with nothing stored (U43) returns a reflected reply that parses as JSON exactly equal to {\"reminders\":[],\"notes\":[]}"
+    assert: "A '/export' command update from a user id with nothing stored (U43) returns a reflected reply that parses as JSON exactly equal to {\"reminders\":[],\"actors\":[],\"notes\":[]}"
 failures: []
 ---
 
@@ -159,7 +159,8 @@ criterion uses a distinct `from.id` so stored notes/reminders do not bleed betwe
 - **off-topic-still-stored** - architecture's own canonical `other` example ("What's the weather
   tomorrow") is stored with `intent == 'other'`, not silently dropped.
 - **reminder-not-double-stored** - a clear reminder message writes a reminder and nothing to `notes`.
-- **export-empty-shape** - `/export` with nothing stored returns exactly `{"reminders":[],"notes":[]}`.
+- **export-empty-shape** - `/export` with nothing stored returns exactly `{"reminders":[],"actors":[],"notes":[]}`
+  (three keys, because 0006-actor-capture has landed - see Scope).
 
 No new deterministic parsing logic is introduced here (unlike `event-at.ts` / `notify-times.ts` /
 `recurrence.ts` for reminders, or the decline-phrase matcher for actors) - `NotesService` is a thin

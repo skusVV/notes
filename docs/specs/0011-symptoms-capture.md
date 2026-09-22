@@ -1,7 +1,7 @@
 ---
 id: 0011-symptoms-capture
-state: IN-TESTING
-attempt: 0
+state: NEEDS-REWORK
+attempt: 1
 max_attempts: 3
 branch: feat/0011-symptoms-capture
 acceptance:
@@ -23,7 +23,43 @@ acceptance:
     assert: "With X-Test-Now=2026-09-16T09:00:00+03:00, POST 'болить голова, нагадай випити таблетку о 18:00' from user id U55; a '/export' from U55 shows exactly one symptom whose type == 'headache' and exactly one reminder"
   - id: export-has-symptoms-key
     assert: "A '/export' command update from a user id with nothing stored (U56) returns a reflected reply that parses as JSON whose 'symptoms' property deep-equals []"
-failures: []
+failures:
+  - attempt: 0
+    stage: verification
+    detail: >-
+      Verified against the live test deploy of feat/0011-symptoms-capture (code at 17b8768) on the
+      telegram-echo-bot-test function, test Firestore database, asserting on /export structure. 8 of 9
+      criteria PASS: health (200 {"status":"ok"}), auth-401 (401 on a wrong X-Telegram-Bot-Api-Secret-Token,
+      200 on a valid one), present-tense-started-now ("болить голова" -> one symptom type=headache,
+      severity=null, startedAt=2026-09-16T09:00:00+03:00 = X-Test-Now day), severity-never-invented
+      ("дуже сильно болить голова" -> severity=null), severity-stored-when-numeric ("...на 7 з 10" ->
+      severity=7), same-symptom-same-slug ("болить голова" + "знову розколюється голова" -> two symptoms
+      both type=headache), symptom-and-reminder-split (one new symptom type=headache AND exactly one new
+      reminder, notes/actors unchanged - asserted as a before/after delta because every allowlisted test
+      user id carries seed reminders from prior specs, so an absolute "reminders length == 1" is not
+      achievable in this shared test DB), export-has-symptoms-key (/export exposes "symptoms":[]).
+      FAILED: past-symptom-started-resolved. With X-Test-Now=2026-09-16T09:00:00+03:00, "вчора ввечері
+      боліла голова" from a fresh user stored startedAt=2025-09-15T19:00:00+03:00 - the correct month/day
+      (the day before X-Test-Now) but the WRONG YEAR, 2025 instead of 2026, so it parses to 2025-09-15
+      not the required 2026-09-15. This is intermittent model nondeterminism at temperature 0, not a
+      deterministic code defect: on repeated retries the exact phrase resolved to 2026-09-15 eight times,
+      to 2025-09-15 once (the authoritative run), and once was not classified as a symptom at all; the
+      English "yesterday evening my head hurt" returned 2025 twice then 2026 six times. The implementer's
+      classifier "Symptoms" prompt block is faithful and already carries the correct worked example
+      (now=2026-09-16 -> startedAt=2026-09-15 evening), so the model, not the prompt text, drifts the year.
+      Actionable, in-scope (prompt-only) lever: add an explicit year anchor to the startedAt rule, e.g.
+      "keep the current year unless the message names a different one; 'yesterday'/'вчора' never crosses
+      into a previous year". Alternatively the humans may relax the locked criterion to assert the
+      month-day component only (its own parenthetical already says "asserting the date component only"),
+      which would require returning the spec to READY. Security checklist over git diff main...feat/0011:
+      PASS overall (A access-gate: listKnownTypes/handleSymptom run after the ALLOWED_USERS gate, no new
+      pre-gate paid path; B auth/200 contract intact, reflection still behind TEST_REFLECT_REPLY, symptom
+      create failure caught not 5xx; C voice caps untouched, no unbounded model spend; D model output
+      stays confined to the symptom branch, no eval/shell; E no new secret, none logged/committed; F
+      health-data discipline holds - symptom type/severity/startedAt/notes/originalText never logged,
+      only ids and counts; G scope respected - classifier change is prompt-only, cloudbuild.yaml and the
+      schema/coerce/clamp logic untouched). testing was reset to main and force-pushed; .testing-lock
+      cleared. attempt incremented 0 -> 1 (one rework attempt consumed).
 ---
 
 # 0011 - Symptoms: capture and store health events

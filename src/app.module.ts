@@ -5,6 +5,7 @@ import { ClockModule } from './clock/clock.module';
 import { FirestoreModule } from './firestore/firestore.module';
 import { NotesModule } from './notes/notes.module';
 import { RemindersModule } from './reminders/reminders.module';
+import { SymptomsModule } from './symptoms/symptoms.module';
 import { TelegramModule } from './telegram/telegram.module';
 
 @Module({
@@ -17,6 +18,7 @@ import { TelegramModule } from './telegram/telegram.module';
     RemindersModule,
     ActorsModule,
     NotesModule,
+    SymptomsModule,
     TelegramModule,
   ],
 })

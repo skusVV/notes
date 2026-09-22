@@ -36,6 +36,7 @@ function makeService(): TelegramService {
   const reminders = { available: false } as unknown;
   const actors = { available: false } as unknown;
   const notes = { available: false } as unknown;
+  const symptoms = { available: false } as unknown;
   const clock = new ClockService();
 
   return new TelegramService(
@@ -45,6 +46,7 @@ function makeService(): TelegramService {
     reminders as never,
     actors as never,
     notes as never,
+    symptoms as never,
     clock,
   );
 }

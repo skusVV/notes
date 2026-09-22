@@ -22,6 +22,7 @@ import {
   OwnedNotification,
   RemindersService,
 } from '../reminders/reminders.service';
+import { SymptomsService } from '../symptoms/symptoms.service';
 import { TranscriptionService } from '../transcription/transcription.service';
 import {
   InlineKeyboardMarkup,
@@ -54,21 +55,22 @@ const MAX_VOICE_BYTES = 15 * 1024 * 1024;
 // sendMessage rejects anything longer, and a few minutes of speech transcribes past it.
 const MAX_MESSAGE_CHARS = 4096;
 
-// Reminders and notes are stored now, but the other intents (symptom, question, actor_info,
-// correction) are still only previewed - as is a note/other that failed to store. This notice is
-// appended only to a reply that did NOT store everything it acted on, so it never contradicts
-// something the bot actually kept. Remove it as each remaining intent gains storage.
+// Reminders, notes and symptoms are stored now, but the other intents (question, actor_info,
+// correction) are still only previewed - as is a note/other that failed to store, or a symptom the
+// store could not keep. This notice is appended only to a reply that did NOT store everything it
+// acted on, so it never contradicts something the bot actually kept. Remove it as each remaining
+// intent gains storage.
 const NOT_STORED_NOTICE =
-  '(reminders and notes are stored so far - other kinds of message are not kept yet)';
+  '(reminders, notes and symptoms are stored so far - other kinds of message are not kept yet)';
 
 const HELP_TEXT = [
   'Send me a note, a reminder, a symptom, or a question - typed or as a voice message.',
   '',
   'I work out which one it is and show you what I understood.',
-  'Reminders with a clear date and time are saved, and stray notes are kept too; other kinds are not kept yet.',
+  'Reminders with a clear date and time are saved, stray notes are kept, and symptoms you report are logged; other kinds are not kept yet.',
   'When a reminder is due I send it with Готово / +1 год / Завтра buttons.',
   '',
-  '/export - show your stored reminders and notes as JSON',
+  '/export - show your stored reminders, notes and symptoms as JSON',
   '/help - this message',
 ].join('\n');
 
@@ -196,6 +198,7 @@ export class TelegramService {
     private readonly reminders: RemindersService,
     private readonly actors: ActorsService,
     private readonly notes: NotesService,
+    private readonly symptoms: SymptomsService,
     private readonly clock: ClockService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
@@ -590,10 +593,11 @@ export class TelegramService {
   }
 
   /**
-   * Dumps the requesting user's stored reminders, actors and notes as one JSON object
-   * `{"reminders":[...],"actors":[...],"notes":[...]}`. Read back by the verifier over HTTP;
-   * assertions are made on this structure, never on reply wording. The output embeds the user's own
-   * words and the names of real people, so it is never logged - only its item counts are.
+   * Dumps the requesting user's stored reminders, actors, notes and symptoms as one JSON object
+   * `{"reminders":[...],"actors":[...],"notes":[...],"symptoms":[...]}`. Read back by the verifier
+   * over HTTP; assertions are made on this structure, never on reply wording. The output embeds the
+   * user's own words, the names of real people and health information, so it is never logged - only
+   * its item counts are.
    */
   private async handleExport(
     chatId: number,
@@ -628,10 +632,19 @@ export class TelegramService {
       }
     }
 
+    let symptoms: Awaited<ReturnType<SymptomsService['list']>> = [];
+    if (from && this.symptoms.available) {
+      try {
+        symptoms = await this.symptoms.list(from.id);
+      } catch (error) {
+        this.logger.error(`Failed to export symptoms for ${sender}`, error as Error);
+      }
+    }
+
     this.logger.log(
-      `Exported ${reminders.length} reminder(s), ${actors.length} actor(s) and ${notes.length} note(s) for ${sender}`,
+      `Exported ${reminders.length} reminder(s), ${actors.length} actor(s), ${notes.length} note(s) and ${symptoms.length} symptom(s) for ${sender}`,
     );
-    await this.sendMessage(chatId, JSON.stringify({ reminders, actors, notes }), sink);
+    await this.sendMessage(chatId, JSON.stringify({ reminders, actors, notes, symptoms }), sink);
   }
 
   private async handleVoice(
@@ -732,6 +745,11 @@ export class TelegramService {
     // the model so it does not raise the same name twice. The app-level check in `resolve` is what
     // actually enforces it - this only saves the model from proposing something pointless.
     const { knownActors, declinedMentions } = await this.actorContext(from, sender);
+    // The slugs this user has already used, so "my head hurts" reuses `headache` rather than the
+    // model minting a new slug each wording - the observable guarantee behind aggregating symptoms
+    // later. Read as part of building the context, so it runs after the allowlist gate; a read
+    // failure must never block classification.
+    const knownSymptomTypes = await this.symptomTypes(from, sender);
     let result: ClassificationResult;
     try {
       if (!prefix) {
@@ -743,12 +761,10 @@ export class TelegramService {
         timezone,
         // The classifier needs the current local time to turn "Thursday" into a real date.
         now: this.clock.formatLocal(now, timezone),
-        // Still empty until the rest of Firestore lands: known vocabulary is what stops the model
-        // inventing a new slug for every wording, and previousText is the only way a correction can
-        // be recognised.
-        knownSymptomTypes: [],
+        knownSymptomTypes,
         knownActors,
         declinedMentions,
+        // previousText is the only way a correction can be recognised; still absent until stored.
         previousText: undefined,
       });
     } catch (error) {
@@ -796,6 +812,15 @@ export class TelegramService {
 
       if (item.intent === 'note' || item.intent === 'other') {
         const outcome = await this.handleNote(item, from, chatId, text, now, sender, result);
+        lines.push(outcome.text);
+        if (!outcome.stored) {
+          hasUnstored = true;
+        }
+        continue;
+      }
+
+      if (item.intent === 'symptom') {
+        const outcome = await this.handleSymptom(item, from, chatId, text, now, sender);
         lines.push(outcome.text);
         if (!outcome.stored) {
           hasUnstored = true;
@@ -851,6 +876,22 @@ export class TelegramService {
       // Degrade to no context rather than failing the message: the worst case is one extra question.
       this.logger.error(`Failed to read actor context for ${sender}`, error as Error);
       return { knownActors: [], declinedMentions: [] };
+    }
+  }
+
+  /** This user's known symptom slugs for the classifier prompt; empty if they cannot be read. */
+  private async symptomTypes(from: TelegramUser | undefined, sender: string): Promise<string[]> {
+    if (!from || !this.symptoms.available) {
+      return [];
+    }
+
+    try {
+      return await this.symptoms.listKnownTypes(from.id);
+    } catch (error) {
+      // Degrade to no vocabulary rather than blocking the classifier call: the worst case is the
+      // model minting a fresh slug for a wording it could have reused.
+      this.logger.error(`Failed to read symptom vocabulary for ${sender}`, error as Error);
+      return [];
     }
   }
 
@@ -1009,6 +1050,64 @@ export class TelegramService {
     // correctly as a preview, not a confirmation) and say plainly it was not kept.
     return {
       text: `${this.describeItem(item, result, now)}\nI could not store this note right now.`,
+      stored: false,
+    };
+  }
+
+  /**
+   * The symptom branch: persist a reported health event and confirm it, or explain why it could not
+   * be stored. The item is already at or above CONFIDENCE_ASK here, which - given the classifier's
+   * validation - means it carries a non-empty `type` (a typeless symptom was forced below the
+   * threshold). Unlike a reminder there is nothing to validate away: `type` is present and every
+   * other field is optional, so the only reason not to store is the store being unavailable, and a
+   * `create` failure is logged, never thrown up to the webhook.
+   *
+   * Nothing about the symptom is logged - it is health information; only the id and the store
+   * outcome are.
+   */
+  private async handleSymptom(
+    item: Classification,
+    from: TelegramUser | undefined,
+    chatId: number,
+    originalText: string,
+    now: Date,
+    sender: string,
+  ): Promise<{ text: string; stored: boolean }> {
+    const symptom = item.symptom;
+
+    if (from && this.symptoms.available && symptom) {
+      try {
+        const id = await this.symptoms.create(
+          from.id,
+          chatId,
+          {
+            type: symptom.type,
+            severity: symptom.severity,
+            startedAt: symptom.startedAt,
+            durationMinutes: symptom.durationMinutes,
+            notes: symptom.notes,
+          },
+          originalText,
+          now,
+        );
+        if (id) {
+          // Reuse the preview block, re-prefixed to read as a confirmation. describeSymptom already
+          // wraps it in withConfidence, so the middle band still shows its number; the `^` anchor
+          // only re-labels the first line and leaves any trailing confidence line intact.
+          return {
+            text: this.describeSymptom(item).replace(/^Symptom:/, 'Logged symptom:'),
+            stored: true,
+          };
+        }
+      } catch (error) {
+        this.logger.error(`Failed to store symptom for ${sender}`, error as Error);
+      }
+    }
+
+    // No user, store unavailable, missing payload, or a create failure: fall back to the preview
+    // and say plainly it was not kept, matching handleReminder's degrade wording.
+    return {
+      text: `${this.describeSymptom(item)}\nI could not store this symptom right now.`,
       stored: false,
     };
   }

@@ -16,6 +16,7 @@ import { ActorsService } from '../src/actors/actors.service';
 import { ClassificationResult } from '../src/classifier/classifier.types';
 import { ClockService } from '../src/clock/clock.service';
 import { NotesService } from '../src/notes/notes.service';
+import { SymptomsService } from '../src/symptoms/symptoms.service';
 import { ActorQuestion, TelegramService } from '../src/telegram/telegram.service';
 import { TelegramUpdate } from '../src/telegram/telegram.types';
 
@@ -59,6 +60,7 @@ function makeService(result: ClassificationResult, seed: Record<string, Record<s
   };
   const actors = new ActorsService({ db: store.db, available: true } as never);
   const notes = new NotesService({ db: store.db, available: true } as never);
+  const symptoms = new SymptomsService({ db: store.db, available: true } as never);
 
   const service = new TelegramService(
     config as never,
@@ -67,10 +69,11 @@ function makeService(result: ClassificationResult, seed: Record<string, Record<s
     reminders as never,
     actors as never,
     notes as never,
+    symptoms as never,
     new ClockService(),
   );
 
-  return { service, store, actors, notes, classify, reminders };
+  return { service, store, actors, notes, symptoms, classify, reminders };
 }
 
 function textUpdate(text: string, messageId = 1, replyTo?: number): TelegramUpdate {
@@ -281,15 +284,16 @@ describe('TelegramService /export', () => {
     mockPost.mockRejectedValue(new Error('404 chat not found'));
   });
 
-  // acceptance: export-actors-empty-shape (now three keys - notes landed in 0007)
-  it('returns all three keys, empty, for a user with nothing stored', async () => {
+  // acceptance: export-actors-empty-shape / export-has-symptoms-key
+  // (now four keys - notes landed in 0007, symptoms in 0011)
+  it('returns all four keys, empty, for a user with nothing stored', async () => {
     const { service } = makeService(reminderResult([]));
     const replies: string[] = [];
 
     await service.handleUpdate(textUpdate('/export'), replies, NOW);
 
     expect(replies).toHaveLength(1);
-    expect(JSON.parse(replies[0])).toEqual({ reminders: [], actors: [], notes: [] });
+    expect(JSON.parse(replies[0])).toEqual({ reminders: [], actors: [], notes: [], symptoms: [] });
   });
 
   it('lists a stored actor with its id, aliases, notes and ISO createdAt', async () => {

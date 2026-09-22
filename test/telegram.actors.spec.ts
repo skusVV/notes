@@ -15,6 +15,7 @@ vi.mock('axios', () => {
 import { ActorsService } from '../src/actors/actors.service';
 import { ClassificationResult } from '../src/classifier/classifier.types';
 import { ClockService } from '../src/clock/clock.service';
+import { NotesService } from '../src/notes/notes.service';
 import { ActorQuestion, TelegramService } from '../src/telegram/telegram.service';
 import { TelegramUpdate } from '../src/telegram/telegram.types';
 
@@ -57,6 +58,7 @@ function makeService(result: ClassificationResult, seed: Record<string, Record<s
     list: vi.fn().mockResolvedValue([]),
   };
   const actors = new ActorsService({ db: store.db, available: true } as never);
+  const notes = new NotesService({ db: store.db, available: true } as never);
 
   const service = new TelegramService(
     config as never,
@@ -64,10 +66,11 @@ function makeService(result: ClassificationResult, seed: Record<string, Record<s
     classifier as never,
     reminders as never,
     actors as never,
+    notes as never,
     new ClockService(),
   );
 
-  return { service, store, actors, classify, reminders };
+  return { service, store, actors, notes, classify, reminders };
 }
 
 function textUpdate(text: string, messageId = 1, replyTo?: number): TelegramUpdate {
@@ -278,15 +281,15 @@ describe('TelegramService /export', () => {
     mockPost.mockRejectedValue(new Error('404 chat not found'));
   });
 
-  // acceptance: export-actors-empty-shape
-  it('returns both keys, empty, for a user with nothing stored', async () => {
+  // acceptance: export-actors-empty-shape (now three keys - notes landed in 0007)
+  it('returns all three keys, empty, for a user with nothing stored', async () => {
     const { service } = makeService(reminderResult([]));
     const replies: string[] = [];
 
     await service.handleUpdate(textUpdate('/export'), replies, NOW);
 
     expect(replies).toHaveLength(1);
-    expect(JSON.parse(replies[0])).toEqual({ reminders: [], actors: [] });
+    expect(JSON.parse(replies[0])).toEqual({ reminders: [], actors: [], notes: [] });
   });
 
   it('lists a stored actor with its id, aliases, notes and ISO createdAt', async () => {

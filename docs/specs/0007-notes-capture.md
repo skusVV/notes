@@ -1,6 +1,6 @@
 ---
 id: 0007-notes-capture
-state: READY
+state: IMPLEMENTED
 attempt: 0
 max_attempts: 3
 branch: feat/0007-notes-capture

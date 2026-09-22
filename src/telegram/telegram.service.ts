@@ -13,6 +13,7 @@ import {
   fallbackResult,
 } from '../classifier/classifier.types';
 import { ClockService } from '../clock/clock.service';
+import { NotesService } from '../notes/notes.service';
 import { normalizeEventAt } from '../reminders/event-at';
 import { describeRecurrence, nextOccurrence } from '../reminders/recurrence';
 import {
@@ -52,19 +53,21 @@ const MAX_VOICE_BYTES = 15 * 1024 * 1024;
 // sendMessage rejects anything longer, and a few minutes of speech transcribes past it.
 const MAX_MESSAGE_CHARS = 4096;
 
-// Reminders are stored now, but the other intents are still only previewed. This notice is
-// appended only to a reply that did NOT store everything it acted on, so it never contradicts a
-// reminder the bot actually kept. Remove it as each remaining intent gains storage.
-const NOT_STORED_NOTICE = '(only reminders are stored so far - other kinds of message are not kept yet)';
+// Reminders and notes are stored now, but the other intents (symptom, question, actor_info,
+// correction) are still only previewed - as is a note/other that failed to store. This notice is
+// appended only to a reply that did NOT store everything it acted on, so it never contradicts
+// something the bot actually kept. Remove it as each remaining intent gains storage.
+const NOT_STORED_NOTICE =
+  '(reminders and notes are stored so far - other kinds of message are not kept yet)';
 
 const HELP_TEXT = [
   'Send me a note, a reminder, a symptom, or a question - typed or as a voice message.',
   '',
   'I work out which one it is and show you what I understood.',
-  'Reminders with a clear date and time are saved; other kinds are not kept yet.',
+  'Reminders with a clear date and time are saved, and stray notes are kept too; other kinds are not kept yet.',
   'When a reminder is due I send it with OK / +1h / Tomorrow buttons.',
   '',
-  '/export - show your stored reminders as JSON',
+  '/export - show your stored reminders and notes as JSON',
   '/help - this message',
 ].join('\n');
 
@@ -191,6 +194,7 @@ export class TelegramService {
     private readonly classifier: ClassifierService,
     private readonly reminders: RemindersService,
     private readonly actors: ActorsService,
+    private readonly notes: NotesService,
     private readonly clock: ClockService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
@@ -581,10 +585,10 @@ export class TelegramService {
   }
 
   /**
-   * Dumps the requesting user's stored reminders and actors as one JSON object
-   * `{"reminders":[...],"actors":[...]}`. Read back by the verifier over HTTP; assertions are made
-   * on this structure, never on reply wording. The output embeds the user's own words and the names
-   * of real people, so it is never logged - only its item counts are.
+   * Dumps the requesting user's stored reminders, actors and notes as one JSON object
+   * `{"reminders":[...],"actors":[...],"notes":[...]}`. Read back by the verifier over HTTP;
+   * assertions are made on this structure, never on reply wording. The output embeds the user's own
+   * words and the names of real people, so it is never logged - only its item counts are.
    */
   private async handleExport(
     chatId: number,
@@ -610,10 +614,19 @@ export class TelegramService {
       }
     }
 
+    let notes: Awaited<ReturnType<NotesService['list']>> = [];
+    if (from && this.notes.available) {
+      try {
+        notes = await this.notes.list(from.id);
+      } catch (error) {
+        this.logger.error(`Failed to export notes for ${sender}`, error as Error);
+      }
+    }
+
     this.logger.log(
-      `Exported ${reminders.length} reminder(s) and ${actors.length} actor(s) for ${sender}`,
+      `Exported ${reminders.length} reminder(s), ${actors.length} actor(s) and ${notes.length} note(s) for ${sender}`,
     );
-    await this.sendMessage(chatId, JSON.stringify({ reminders, actors }), sink);
+    await this.sendMessage(chatId, JSON.stringify({ reminders, actors, notes }), sink);
   }
 
   private async handleVoice(
@@ -769,6 +782,15 @@ export class TelegramService {
 
       if (item.intent === 'reminder') {
         const outcome = await this.handleReminder(item, from, chatId, text, now, sender);
+        lines.push(outcome.text);
+        if (!outcome.stored) {
+          hasUnstored = true;
+        }
+        continue;
+      }
+
+      if (item.intent === 'note' || item.intent === 'other') {
+        const outcome = await this.handleNote(item, from, chatId, text, now, sender, result);
         lines.push(outcome.text);
         if (!outcome.stored) {
           hasUnstored = true;
@@ -943,6 +965,47 @@ export class TelegramService {
         stored: false,
       };
     }
+  }
+
+  /**
+   * The note branch: persist a stray thought (`note`) or an off-topic message (`other`), keeping
+   * the classified intent distinct, and confirm it. The item is already at or above CONFIDENCE_ASK
+   * here. Unlike a reminder there is nothing to validate away - the summary is the classifier's own
+   * words about text that already exists - so the only reason not to store is the store being
+   * unavailable, and a `create` failure is logged, never thrown up to the webhook.
+   */
+  private async handleNote(
+    item: Classification,
+    from: TelegramUser | undefined,
+    chatId: number,
+    originalText: string,
+    now: Date,
+    sender: string,
+    result: ClassificationResult,
+  ): Promise<{ text: string; stored: boolean }> {
+    const intent = item.intent === 'other' ? 'other' : 'note';
+
+    if (from && this.notes.available) {
+      try {
+        const id = await this.notes.create(from.id, chatId, originalText, item.summary, intent, now);
+        if (id) {
+          const body =
+            intent === 'other'
+              ? `Not sure what that was, so I kept it as a note: ${item.summary}`
+              : `Note saved: ${item.summary}`;
+          return { text: this.withConfidence(body, item), stored: true };
+        }
+      } catch (error) {
+        this.logger.error(`Failed to store note for ${sender}`, error as Error);
+      }
+    }
+
+    // No user, store unavailable, or a create failure: fall back to the preview wording (which reads
+    // correctly as a preview, not a confirmation) and say plainly it was not kept.
+    return {
+      text: `${this.describeItem(item, result)}\nI could not store this note right now.`,
+      stored: false,
+    };
   }
 
   /**

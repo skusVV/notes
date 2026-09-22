@@ -48,8 +48,9 @@ function makeService(reminders: ReturnType<typeof fakeReminders>, allowedUsers?:
   const transcription = { available: false };
   const classifier = { available: false, defaultTimezone: 'Europe/Kyiv' };
 
-  // The callback path never touches actors, so an unavailable one is enough.
+  // The callback path never touches actors or notes, so an unavailable one is enough.
   const actors = { available: false };
+  const notes = { available: false };
 
   return new TelegramService(
     config as never,
@@ -57,6 +58,7 @@ function makeService(reminders: ReturnType<typeof fakeReminders>, allowedUsers?:
     classifier as never,
     reminders as never,
     actors as never,
+    notes as never,
     new ClockService(),
   );
 }

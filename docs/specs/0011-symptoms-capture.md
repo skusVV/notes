@@ -1,6 +1,6 @@
 ---
 id: 0011-symptoms-capture
-state: IMPLEMENTED
+state: IN-TESTING
 attempt: 0
 max_attempts: 3
 branch: feat/0011-symptoms-capture

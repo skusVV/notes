@@ -1,6 +1,6 @@
 ---
 id: 0011-symptoms-capture
-state: IN-TESTING
+state: VERIFIED
 attempt: 1
 max_attempts: 3
 branch: feat/0011-symptoms-capture

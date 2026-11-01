@@ -4,13 +4,16 @@ import { timingSafeEqual } from 'node:crypto';
 import { TelegramService } from '../telegram/telegram.service';
 
 /**
- * The shared check for every `/ingest/*` endpoint: the owner's own devices (an iPhone Shortcut
+ * The shared check for every `/ingest/*` endpoint: allowed users' own devices (an iPhone Shortcut
  * today, calendar and health sync later) posting into the bot. Authenticated with its own secret
  * rather than the Telegram webhook's, because it is a different caller.
  *
  * Unlike the webhook, "not configured" fails closed: with no `INGEST_SECRET`, or no valid id in
- * `ALLOWED_USERS` to act as the owner, the endpoint answers 401, the same as `/sweep` without its
- * secret. An open ingest endpoint would let anyone on the internet write into the owner's memory.
+ * `ALLOWED_USERS`, the endpoint answers 401, the same as `/sweep` without its secret. An open
+ * allowlist would let anyone holding the secret write as any user id at all.
+ *
+ * This only authenticates the caller. Which user the request acts for is the body's `userId`,
+ * validated and checked against `ALLOWED_USERS` by each endpoint after this guard.
  */
 @Injectable()
 export class IngestGuard {
@@ -22,11 +25,10 @@ export class IngestGuard {
   ) {}
 
   /**
-   * Throws 401 unless `received` matches `INGEST_SECRET` (constant-time compare) and an owner is
-   * configured. Returns the owner's Telegram user id - the first id in `ALLOWED_USERS`, taken from
-   * config and never from the request, so a caller cannot claim to be someone else.
+   * Throws 401 unless `received` matches `INGEST_SECRET` (constant-time compare) and
+   * `ALLOWED_USERS` has at least one valid id.
    */
-  assertIngestSecret(received: string | undefined): number {
+  assertIngestSecret(received: string | undefined): void {
     // Secret Manager values often carry a trailing newline, so the configured value is trimmed.
     const expected = this.config.get<string>('INGEST_SECRET')?.trim();
     if (!expected) {
@@ -34,11 +36,8 @@ export class IngestGuard {
       throw new UnauthorizedException();
     }
 
-    const userId = this.telegram.ownerUserId();
-    if (userId === undefined) {
-      this.logger.warn(
-        'Rejected ingest: ALLOWED_USERS has no valid id to act as owner, the endpoint is disabled',
-      );
+    if (!this.telegram.hasAllowlist()) {
+      this.logger.warn('Rejected ingest: ALLOWED_USERS has no valid id, the endpoint is disabled');
       throw new UnauthorizedException();
     }
 
@@ -51,7 +50,5 @@ export class IngestGuard {
       );
       throw new UnauthorizedException();
     }
-
-    return userId;
   }
 }

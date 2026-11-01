@@ -276,16 +276,16 @@ export class TelegramService {
   }
 
   /**
-   * The owner `/ingest/*` acts as: the first valid id in `ALLOWED_USERS`, in the order written
-   * (a Set keeps insertion order, and invalid entries were already dropped by `parseAllowedUsers`).
-   * Undefined when the list is unset, empty, or has no valid id - the ingest guard then fails
-   * closed rather than guessing an owner.
+   * Whether `id` is in `ALLOWED_USERS` - the same list the update gate uses. Unlike that gate, an
+   * empty list allows nobody here: `/ingest/*` fails closed and checks `hasAllowlist()` first.
    */
-  ownerUserId(): number | undefined {
-    for (const id of this.allowedUsers) {
-      return id;
-    }
-    return undefined;
+  isAllowedUserId(id: number): boolean {
+    return this.allowedUsers.has(id);
+  }
+
+  /** False when `ALLOWED_USERS` is unset, empty, or has no valid id. */
+  hasAllowlist(): boolean {
+    return this.allowedUsers.size > 0;
   }
 
   // `sink`, when provided, collects every reply this update produces. The test function passes one
@@ -380,11 +380,12 @@ export class TelegramService {
   }
 
   /**
-   * Text captured outside Telegram (`POST /ingest/message`), handled exactly as if the owner had
+   * Text captured outside Telegram (`POST /ingest/message`), handled exactly as if that user had
    * typed it in the chat: it is wrapped in a synthetic private-chat update and fed to
    * `handleUpdate`, so the allowlist gate, command routing, classification and storage all apply
-   * unchanged. In a private chat `chat.id` equals the user id, so the reply lands in the owner's
-   * chat. `userId` is `ownerUserId()` (the first id in `ALLOWED_USERS`), never from the request.
+   * unchanged. In a private chat `chat.id` equals the user id, so the reply lands in that user's
+   * chat. `userId` comes from the request body, already validated and checked against
+   * `ALLOWED_USERS` by the ingest controller.
    *
    * `update_id` and `message_id` come from the real clock - unique per request. `update_id` is
    * only ever logged, so a collision with a real Telegram id breaks nothing.

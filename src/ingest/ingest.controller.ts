@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Headers,
   HttpCode,
   Logger,
@@ -17,6 +18,30 @@ export const INGEST_MAX_TEXT_CHARS = 4000;
 /** The 400 body for a missing, empty or oversized `text`. */
 const INVALID_TEXT = { ok: false, error: 'invalid_text' } as const;
 
+/** The 400 body for a missing `userId`, or one that is not a positive integer. */
+const INVALID_USER = { ok: false, error: 'invalid_user' } as const;
+
+/** The 403 body for a `userId` that is not in `ALLOWED_USERS`. */
+const USER_NOT_ALLOWED = { ok: false, error: 'user_not_allowed' } as const;
+
+/**
+ * The body's `userId` as a positive safe integer, or undefined. A JSON number or a string of digits
+ * is accepted, because iOS Shortcuts often send values as text. Zero, negatives, fractions,
+ * exponents and anything else non-numeric are rejected - nothing is rounded or guessed.
+ */
+export function parseIngestUserId(raw: unknown): number | undefined {
+  let id: number;
+  if (typeof raw === 'number') {
+    id = raw;
+  } else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    id = Number(raw.trim());
+  } else {
+    return undefined;
+  }
+
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
 @Controller('ingest')
 export class IngestController {
   private readonly logger = new Logger(IngestController.name);
@@ -28,13 +53,15 @@ export class IngestController {
   ) {}
 
   /**
-   * Quick capture from the owner's phone: the text goes down exactly the path a chat message takes
-   * (allowlist, commands, classification, storage, reply in Telegram).
+   * Quick capture from an allowed user's phone: the text goes down exactly the path a chat message
+   * takes (allowlist, commands, classification, storage, reply in that user's Telegram chat).
    *
-   * 401 before anything else when the secret is wrong or ingest is not configured. A bad `text` is
-   * a 400 - the caller is the owner's own Shortcut, which benefits from seeing the error, and there
-   * is no Telegram retry loop here. A failure *after* validation is logged and still answers 200,
-   * for the same reason the webhook does.
+   * Checks run in a fixed order: 401 when the secret is wrong or ingest is not configured, then a
+   * bad `text` (400 invalid_text), then a bad `userId` (400 invalid_user), then a `userId` outside
+   * `ALLOWED_USERS` (403 user_not_allowed). The 400s help the caller's own Shortcut show the error,
+   * and there is no Telegram retry loop here. The 403 happens before any model call and sends
+   * nothing to Telegram. A failure *after* validation is logged and still answers 200, for the same
+   * reason the webhook does.
    */
   @Post('message')
   @HttpCode(200)
@@ -43,12 +70,24 @@ export class IngestController {
     @Headers('x-test-now') testNow: string | undefined,
     @Body() body: unknown,
   ): Promise<{ ok: boolean; replies?: string[] }> {
-    const userId = this.guard.assertIngestSecret(secret);
+    this.guard.assertIngestSecret(secret);
 
-    const raw = (body as { text?: unknown } | undefined)?.text;
+    const fields = body as { text?: unknown; userId?: unknown } | null | undefined;
+    const raw = fields?.text;
     const text = typeof raw === 'string' ? raw.trim() : '';
     if (!text || text.length > INGEST_MAX_TEXT_CHARS) {
       throw new BadRequestException(INVALID_TEXT);
+    }
+
+    const userId = parseIngestUserId(fields?.userId);
+    if (userId === undefined) {
+      throw new BadRequestException(INVALID_USER);
+    }
+
+    // The gate runs before any model call or Telegram message, as it does for the webhook.
+    if (!this.telegram.isAllowedUserId(userId)) {
+      this.logger.warn(`Rejected ingest: user ${userId} is not in ALLOWED_USERS`);
+      throw new ForbiddenException(USER_NOT_ALLOWED);
     }
 
     // Same reflect/X-Test-Now trust boundary as the webhook and /sweep: test function only.

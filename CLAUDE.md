@@ -88,9 +88,9 @@ whenever a list is configured. It travels via Secret Manager rather than `--set-
 that flag treats commas as its own separator - a list would be parsed as multiple env vars.
 Prod and test read **separate** lists: the `ALLOWED_USERS` env var is fed from the secret named by
 `_ALLOWED_USERS_SECRET_NAME` (`ALLOWED_USERS` in prod, normally just the owner's id;
-`ALLOWED_USERS_TEST` on the test function, the six synthetic `9000000xx` ids then the owner). **Order
-in the list is significant: the first valid id is the owner** that `/ingest/*` acts as
-(`TelegramService.ownerUserId()`), so reordering the secret changes who ingested text is filed under.
+`ALLOWED_USERS_TEST` on the test function, the six synthetic `9000000xx` ids plus the owner). Order in
+the list does not matter. `TelegramService.isAllowedUserId(id)` and `hasAllowlist()` expose the same
+list to `/ingest/*`, which - unlike the webhook - treats an empty list as "nobody", not "everybody".
 
 **Transcription is behind an outcome-named boundary.** `TranscriptionService`
 ([src/transcription/transcription.service.ts](src/transcription/transcription.service.ts)) exposes
@@ -174,22 +174,27 @@ compare); everything else gets `200` even when handling throws, so Telegram does
 update indefinitely. Failures are logged instead. Preserve this - returning 5xx to Telegram causes
 retry storms.
 
-**`/ingest/*` is the owner's own devices posting in** ([src/ingest/](src/ingest/)). `POST
-/ingest/message` (the iPhone quick-capture Shortcut) wraps `{ "text" }` in a synthetic private-chat
+**`/ingest/*` is allowed users' own devices posting in** ([src/ingest/](src/ingest/)). `POST
+/ingest/message` (the iPhone quick-capture Shortcut) wraps `{ "userId", "text" }` in a synthetic private-chat
 update via `TelegramService.handleIngestedText` and calls `handleUpdate`, so it takes exactly the
 chat path - `ALLOWED_USERS` gate, command routing, classification, storage, reply in Telegram. Do not
-give it a shortcut around `handleUpdate`. The user is `TelegramService.ownerUserId()` - the first
-valid id in `ALLOWED_USERS` - never from the body, so the caller cannot claim to be someone else. `IngestGuard.assertIngestSecret` is the shared
+give it a shortcut around `handleUpdate`. The user is the body's **required** `userId` (a positive
+integer, as a JSON number or a digit string - Shortcuts often send text); there is no default user, so
+a request that forgets it is a `400 invalid_user` rather than landing in someone else's notes.
+Checks run in a fixed order: secret (`401`), `text` (`400 invalid_text`), `userId` (`400
+invalid_user`), then `isAllowedUserId` (`403 user_not_allowed`), and the `403` fires before any model
+call or Telegram message. Accepted risk: anyone holding the shared secret can write as any allowed
+user. `IngestGuard.assertIngestSecret` is the shared
 check every future `/ingest/*` endpoint (calendar, health sync) reuses: `X-Ingest-Secret` against
 `INGEST_SECRET`, timing-safe, lengths-only logging, and it **fails closed** - with `INGEST_SECRET`
-unset, or no valid id in `ALLOWED_USERS` to act as owner, the endpoint answers `401`, the opposite of
+unset, or no valid id in `ALLOWED_USERS`, the endpoint answers `401`, the opposite of
 the webhook's skip-when-unset.
 Unlike the webhook, a bad `text` is a `400` (the caller is a Shortcut that benefits from seeing it,
 and there is no Telegram retry loop), but a failure *after* validation is still logged and `200`.
 Ingested text is never logged, only the user id. `INGEST_SECRET` followed the same four steps as any
 new secret (`.env.example`, a Secret Manager secret, `--set-secrets` via the `_INGEST_SECRET_NAME`
-substitution, the accessor grant). There is no separate owner-id setting: the owner comes from the
-per-function `ALLOWED_USERS` list, so it never sits in a trigger and test and prod stay separate.
+substitution, the accessor grant). There is no owner-id setting: the user comes from each request,
+checked against the per-function `ALLOWED_USERS` list, so test and prod stay separate.
 
 **Deploy pipeline.** Push to the trigger's branch -> Cloud Build runs `cloudbuild.yaml` -> a single
 `gcloud functions deploy --gen2 --source=.` **inside the build container** - the deploy command

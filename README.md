@@ -32,9 +32,9 @@ All sensitive values come from the environment, never from source:
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. Required. |
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
-| `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a plain refusal message (it does not include their id; the id is in the logs). Empty or unset allows everyone. **Order matters: the first valid id is the owner** that `/ingest/*` files text under, so put your own id first. Prod reads the secret `ALLOWED_USERS`, the test function reads `ALLOWED_USERS_TEST` (substitution `_ALLOWED_USERS_SECRET_NAME`). |
+| `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a plain refusal message (it does not include their id; the id is in the logs). Empty or unset allows everyone (but `/ingest/*` then answers `401`). Order does not matter. Prod reads the secret `ALLOWED_USERS`, the test function reads `ALLOWED_USERS_TEST` (substitution `_ALLOWED_USERS_SECRET_NAME`). |
 | `REMINDER_SWEEP_SECRET` | Shared secret Cloud Scheduler sends in the `X-Sweep-Secret` header when it calls `POST /sweep`, the endpoint that delivers due reminders. **Unset disables `/sweep`** (it answers `401` and delivers nothing) - unlike the webhook secret, "not configured" fails closed. |
-| `INGEST_SECRET` | Shared secret for every `POST /ingest/*` endpoint, sent in the `X-Ingest-Secret` header (the iPhone quick-capture Shortcut, see step 9). **Unset disables `/ingest`** (it answers `401`), like `/sweep`. Text sent to `/ingest/message` is handled as if the first id in `ALLOWED_USERS` typed it in their private chat with the bot - taken from config, never from the request. With no valid id in `ALLOWED_USERS`, `/ingest` also answers `401`. |
+| `INGEST_SECRET` | Shared secret for every `POST /ingest/*` endpoint, sent in the `X-Ingest-Secret` header (the iPhone quick-capture Shortcut, see step 9). **Unset disables `/ingest`** (it answers `401`), like `/sweep`. Text sent to `/ingest/message` is handled as if the user named by the body's `userId` typed it in their private chat with the bot; that id must be in `ALLOWED_USERS` (`403` otherwise). With no valid id in `ALLOWED_USERS`, `/ingest` also answers `401`. Anyone holding this secret can write as any allowed user, so do not share it outside people you trust. |
 | `REMINDER_SWEEP_INTERVAL_MINUTES` | Optional, default `30`. The sweep's look-ahead: each tick delivers everything due before the next tick, so reminders fire up to this many minutes early rather than late. Keep it **equal to the Cloud Scheduler frequency**. |
 | `GCP_PROJECT` | GCP project used for Vertex AI transcription/classification and Firestore. No API key involved. If unset, voice messages are refused politely, classification degrades to plain echo, and reminders are not stored - text echo keeps working. Set automatically on deploy. |
 | `FIRESTORE_DATABASE` | Firestore database id reminders are stored in. Code default `(default)`; deployed as `(default)` in production and `test` on the test function via `cloudbuild.yaml`, so the test lane never touches production data. |
@@ -113,7 +113,7 @@ comes up empty - Google renames the labels, not the ids.
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | the token @BotFather gave you |
 | `TELEGRAM_WEBHOOK_SECRET` | a random string of `A-Z a-z 0-9 _ -` only, e.g. from `openssl rand -hex 24` (keep a copy, you need it for `setWebhook`) |
-| `ALLOWED_USERS` | comma-separated Telegram user ids, **your own id first** (it is the owner `/ingest` files text under), e.g. `111111111,222222222`. For a single-user bot, just your own id |
+| `ALLOWED_USERS` | comma-separated Telegram user ids, in any order, e.g. `111111111,222222222`. For a single-user bot, just your own id |
 | `REMINDER_SWEEP_SECRET` | another random string of `A-Z a-z 0-9 _ -`, e.g. from `openssl rand -hex 24` (keep a copy, the Cloud Scheduler job in step 8 sends it as a header) |
 | `INGEST_SECRET` | another random string of `A-Z a-z 0-9 _ -`, 32+ characters, e.g. from `openssl rand -hex 24` (keep a copy, the iPhone Shortcut in step 9 sends it as a header) |
 
@@ -140,8 +140,7 @@ the test function without knowing the production value. The same goes for `INGES
 
 Prod and test also keep **separate allowlists**: prod reads `ALLOWED_USERS` (normally just your own id),
 the test function reads `ALLOWED_USERS_TEST`, value `900000001,900000002,900000003,900000004,900000005,900000006,<your id>`.
-The six `9000000xx` ids are the verifier's synthetic users; `900000001` comes first, so it is the test
-function's `/ingest` owner. Keep them out of the prod list.
+The six `9000000xx` ids are the verifier's synthetic users. Keep them out of the prod list.
 
 Every secret named in `--set-secrets` must exist **before** the next deploy, or the build fails with
 `... versions/latest was not found`. That includes `INGEST_SECRET` (and `INGEST_SECRET_TEST` and
@@ -385,9 +384,11 @@ arrives in Telegram. The phone only shows "Sent". This needs no knowledge of the
 1. **Secret.** **Security -> Secret Manager -> Create secret**: name `INGEST_SECRET`, value a random
    string of 32+ characters (`A-Z a-z 0-9 _ -`). On its **Permissions** tab -> **Grant access**, give
    `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` the role **Secret Manager Secret
-   Accessor**. Make sure your own Telegram user id is the **first** id in the `ALLOWED_USERS` secret
-   (see "To find your own user id" above) - `/ingest` files text under that user. Then **Run** the
-   trigger.
+   Accessor**. Make sure the Telegram user id of everyone who will use the Shortcut is in the
+   `ALLOWED_USERS` secret. Then **Run** the trigger.
+   **Find your user id:** message the bot and read the `Received message from user <id>` line in
+   Cloud Logging (see "To find your own user id" above), or ask `@userinfobot` in Telegram. Each person
+   puts their **own** id in their own Shortcut.
 2. **Address.** **Cloud Run functions -> `telegram-echo-bot` -> Trigger** tab, copy the function URL.
    The Shortcut's full address is `<URL>/ingest/message`.
 3. **Shortcut.** On the iPhone open **Shortcuts** (Команди) -> **+**, name it "Нотатка" (or "Note").
@@ -397,7 +398,13 @@ arrives in Telegram. The phone only shows "Sent". This needs no knowledge of the
       - URL: `<URL>/ingest/message`
       - Method: **POST**
       - Headers: `X-Ingest-Secret` = the secret from step 1, `Content-Type` = `application/json`
-      - Request Body: **JSON**, one field `text` = the **Dictated Text** variable
+      - Request Body: **JSON**, two fields:
+        - `userId` (Number, or Text - digits are accepted either way) = your Telegram user id
+        - `text` = the **Dictated Text** variable
+
+      The body then looks like `{"userId": 281473866, "text": "Нотатка: перевірка зв'язку"}`. Without
+      `userId` the bot answers `400 invalid_user` - a Shortcut set up before this field existed stops
+      working until you add it.
    3. **Show Notification** (Показати сповіщення): "Надіслано" ("Sent").
 4. **Bind it to a button** - one of:
    - **Action Button** (iPhone 15 Pro and later, every 16 and 17): **Settings -> Action Button ->
@@ -414,15 +421,19 @@ What the endpoint answers:
 
 | Situation | Response |
 | --- | --- |
-| missing or wrong `X-Ingest-Secret`, `INGEST_SECRET` not set, or no valid id in `ALLOWED_USERS` | `401`, nothing processed |
+| missing or wrong `X-Ingest-Secret`, `INGEST_SECRET` not set, or `ALLOWED_USERS` empty or unset | `401`, nothing processed |
 | `text` missing, not a string, empty after trimming, or longer than 4000 characters | `400` `{"ok":false,"error":"invalid_text"}` |
+| `userId` missing, or not a positive whole number (a number or a string of digits) | `400` `{"ok":false,"error":"invalid_user"}` |
+| `userId` not in `ALLOWED_USERS` | `403` `{"ok":false,"error":"user_not_allowed"}`, nothing sent to Telegram |
 | otherwise | `200` `{"ok":true}` - also when handling fails afterwards (the failure is logged) |
 
-A line that starts with `/` runs as a command, just like in the chat (`/version`, `/export`). The
-text still passes the `ALLOWED_USERS` gate; the owner is the list's first id, so it always does.
+The checks run top to bottom, so if both `text` and `userId` are wrong the answer is `invalid_text`.
+The reply arrives in the private chat of the user named by `userId`.
+
+A line that starts with `/` runs as a command, just like in the chat (`/version`, `/export`).
 
 For the test function, the `testing` trigger sets `_INGEST_SECRET_NAME=INGEST_SECRET_TEST` and
-`_ALLOWED_USERS_SECRET_NAME=ALLOWED_USERS_TEST` (first id `900000001`, so that is the test owner), and
+`_ALLOWED_USERS_SECRET_NAME=ALLOWED_USERS_TEST` (so the synthetic `9000000xx` ids are allowed), and
 the verifier reads the matching ingest secret from `TEST_INGEST_SECRET` in `.env`.
 
 ## Behaviour notes

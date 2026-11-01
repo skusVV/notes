@@ -1,6 +1,6 @@
 ---
 id: 0013-iphone-quick-capture
-state: IMPLEMENTED
+state: IN-TESTING
 attempt: 0
 max_attempts: 3
 branch: feat/0013-iphone-quick-capture

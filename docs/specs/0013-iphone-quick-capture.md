@@ -70,11 +70,10 @@ failures: []
 - `src/telegram/telegram.service.ts` - публічний метод `handleIngestedText(userId, text, sink?,
   nowOverride?)`, що будує синтетичне оновлення і викликає `handleUpdate`. Існуючу логіку не міняти.
 - `.env.example` - `INGEST_SECRET`, `INGEST_USER_ID`, `TEST_INGEST_SECRET`.
-- `cloudbuild.yaml` - `INGEST_SECRET=${_INGEST_SECRET_NAME}:latest` у `--set-secrets`; `INGEST_USER_ID=${_INGEST_USER_ID}`
-  у `--set-env-vars` (один id, ком немає, тож обмеження `--set-env-vars` не діє). Нові підстановки
-  `_INGEST_SECRET_NAME: INGEST_SECRET` та `_INGEST_USER_ID` (значення задається в тригері, не в файлі, бо id
-  різний для тесту і проду); коментар біля підстановок для тригера `testing`:
-  `_INGEST_SECRET_NAME=INGEST_SECRET_TEST  _INGEST_USER_ID=900000001`.
+- `cloudbuild.yaml` - `INGEST_SECRET=${_INGEST_SECRET_NAME}:latest` у `--set-secrets`; `INGEST_USER_ID=${_INGEST_USER_ID_SECRET_NAME}:latest`
+  теж у `--set-secrets` (id власника лежить у Secret Manager, не в тригері, окремо для проду і тесту).
+  Підстановки `_INGEST_SECRET_NAME: INGEST_SECRET` і `_INGEST_USER_ID_SECRET_NAME: INGEST_USER_ID`; коментар
+  для тригера `testing`: `_INGEST_SECRET_NAME=INGEST_SECRET_TEST  _INGEST_USER_ID_SECRET_NAME=INGEST_USER_ID_TEST`.
 - `.claude/agents/spec-verifier/AGENT.md`, `.claude/skills/verify-spec/SKILL.md`, `.claude/skills/implement-spec/SKILL.md` -
   лише згадка, що верифікатор бере `TEST_INGEST_SECRET` з `.env` поряд із `TEST_WEBHOOK_SECRET`.
 - `README.md` - **розділ "iPhone: швидка нотатка"** (див. нижче) і кроки створення секрету.
@@ -119,7 +118,7 @@ INGEST_USER_ID`, `from.is_bot == false`, `text` - з тіла. `update_id` у к
 | Змінна | Звідки | Зміст |
 |---|---|---|
 | `INGEST_SECRET` | Secret Manager | Спільний секрет для всіх `/ingest/*`. Довгий випадковий рядок. |
-| `INGEST_USER_ID` | `--set-env-vars` | Telegram user id власника. |
+| `INGEST_USER_ID` | Secret Manager | Telegram user id власника (прод і тест мають свої секрети). |
 | `INGEST_MAX_TEXT_CHARS` | код, за замовч. 4000 | Ліміт довжини. |
 
 ## Налаштування на телефоні (текст для README, Cloud Console + iOS)

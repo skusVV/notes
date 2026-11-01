@@ -182,8 +182,9 @@ Unlike the webhook, a bad `text` is a `400` (the caller is a Shortcut that benef
 and there is no Telegram retry loop), but a failure *after* validation is still logged and `200`.
 Ingested text is never logged, only the user id. `INGEST_SECRET` followed the same four steps as any
 new secret (`.env.example`, a Secret Manager secret, `--set-secrets` via the `_INGEST_SECRET_NAME`
-substitution, the accessor grant); `INGEST_USER_ID` rides `--set-env-vars` via `_INGEST_USER_ID`,
-which is set per trigger rather than in the file because the id differs between test and prod.
+substitution, the accessor grant); `INGEST_USER_ID` is a Secret Manager secret too (`INGEST_USER_ID` in prod, `INGEST_USER_ID_TEST` on
+the test function, chosen by `_INGEST_USER_ID_SECRET_NAME`), so the owner id never sits in a trigger and
+test and prod stay separate.
 
 **Deploy pipeline.** Push to the trigger's branch -> Cloud Build runs `cloudbuild.yaml` -> a single
 `gcloud functions deploy --gen2 --source=.` **inside the build container** - the deploy command

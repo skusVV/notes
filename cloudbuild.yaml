@@ -28,8 +28,9 @@ steps:
       # REMINDER_SWEEP_SECRET authenticates the Cloud Scheduler tick that hits POST /sweep. Unset,
       # that endpoint is disabled, so no reminder is ever delivered.
       # INGEST_SECRET authenticates POST /ingest/* (the iPhone quick-capture Shortcut). Unset, those
-      # endpoints answer 401.
-      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=ALLOWED_USERS:latest,REMINDER_SWEEP_SECRET=${_SWEEP_SECRET_NAME}:latest,INGEST_SECRET=${_INGEST_SECRET_NAME}:latest
+      # endpoints answer 401. INGEST_USER_ID is the owner /ingest/* acts as; it is a secret too, so the
+      # prod and test functions each read their own (the id differs) and it never sits in a trigger.
+      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=ALLOWED_USERS:latest,REMINDER_SWEEP_SECRET=${_SWEEP_SECRET_NAME}:latest,INGEST_SECRET=${_INGEST_SECRET_NAME}:latest,INGEST_USER_ID=${_INGEST_USER_ID_SECRET_NAME}:latest
       # Not secret, so plain env vars. Transcription needs no API key: the function calls Vertex AI
       # as its own runtime service account. It only needs to know which project and endpoint to
       # talk to. Declared here rather than left to code defaults so the model id is visible and
@@ -45,9 +46,7 @@ steps:
       # REMINDER_SWEEP_INTERVAL_MINUTES is the sweep's look-ahead: each tick delivers everything due
       # before the next one. It must stay equal to the Cloud Scheduler job's frequency (*/30), or
       # reminders arrive late (cron slower) or the same window is swept twice (cron faster).
-      # INGEST_USER_ID is the owner /ingest/* acts as. A single id has no comma, so it is safe in this
-      # flag (unlike ALLOWED_USERS). Unset, /ingest/* answers 401.
-      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,CLASSIFIER_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300,DEFAULT_TIMEZONE=Europe/Kyiv,REMINDER_SWEEP_INTERVAL_MINUTES=30,TEST_REFLECT_REPLY=${_REPLY_REFLECT},FIRESTORE_DATABASE=${_FIRESTORE_DB},INGEST_USER_ID=${_INGEST_USER_ID}
+      - --set-env-vars=GCP_PROJECT=${PROJECT_ID},VERTEX_LOCATION=global,TRANSCRIPTION_MODEL=gemini-3.5-flash-lite,CLASSIFIER_MODEL=gemini-3.5-flash-lite,MAX_VOICE_SECONDS=300,DEFAULT_TIMEZONE=Europe/Kyiv,REMINDER_SWEEP_INTERVAL_MINUTES=30,TEST_REFLECT_REPLY=${_REPLY_REFLECT},FIRESTORE_DATABASE=${_FIRESTORE_DB}
 
   # Creates or updates the Cloud Scheduler job that ticks POST /sweep every 30 minutes - the
   # schedule is defined here, not clicked together in Console, so it self-heals if ever deleted
@@ -94,15 +93,13 @@ substitutions:
   #   _FUNCTION_NAME=telegram-echo-bot-test  _TOKEN_SECRET=TELEGRAM_BOT_TOKEN_TEST
   #   _WEBHOOK_SECRET_NAME=TELEGRAM_WEBHOOK_SECRET_TEST  _REPLY_REFLECT=true  _FIRESTORE_DB=test
   #   _SWEEP_SECRET_NAME=REMINDER_SWEEP_SECRET_TEST  _SWEEP_JOB_NAME=reminder-sweep-test
-  #   _INGEST_SECRET_NAME=INGEST_SECRET_TEST  _INGEST_USER_ID=900000001
+  #   _INGEST_SECRET_NAME=INGEST_SECRET_TEST  _INGEST_USER_ID_SECRET_NAME=INGEST_USER_ID_TEST
   _TOKEN_SECRET: TELEGRAM_BOT_TOKEN
   _WEBHOOK_SECRET_NAME: TELEGRAM_WEBHOOK_SECRET
   _SWEEP_SECRET_NAME: REMINDER_SWEEP_SECRET
   _SWEEP_JOB_NAME: reminder-sweep
   _INGEST_SECRET_NAME: INGEST_SECRET
-  # The owner's Telegram user id. Deliberately has no value in this file: it differs between the
-  # test and production functions, so each trigger sets it. Left empty, /ingest/* answers 401.
-  _INGEST_USER_ID: ''
+  _INGEST_USER_ID_SECRET_NAME: INGEST_USER_ID
   _REPLY_REFLECT: 'false'
   _FIRESTORE_DB: '(default)'
 

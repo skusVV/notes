@@ -1,7 +1,7 @@
 ---
 id: 0016-split-allowed-users
-state: IN-TESTING
-attempt: 0
+state: BLOCKED
+attempt: 1
 max_attempts: 3
 branch: feat/0016-split-allowed-users
 acceptance:
@@ -21,7 +21,24 @@ acceptance:
     assert: "POST a webhook update with text 'hello' from user id 900000007 (not in the test allowlist); the reflected reply is a refusal that contains the digits 900000007, and a '/export' from U1 is unchanged"
   - id: webhook-unchanged
     assert: "POST / with a wrong X-Telegram-Bot-Api-Secret-Token returns 401; with the right one, '/version' from U1 returns 200 and a reflected reply matching /^notes-bot \\d+\\.\\d+\\.\\d+$/"
-failures: []
+failures:
+  - attempt: 0
+    stage: verification
+    detail: >-
+      Criterion conflict, not an implementation defect - needs the owner. Verified on the live test deploy
+      of feat/0016-split-allowed-users (af5b6b8) on telegram-echo-bot-test; the deploy was proven live when
+      POST /ingest/message with a valid X-Ingest-Secret flipped from 404 to 200 at 12:37 UTC. 7 of 8
+      criteria PASS (health, ingest-owner-is-first-allowed-id: note YP1brMHmssw79gHOJTtZ with originalText
+      'Нотатка: код від сейфа 7733' stored under U1 and none under U2, ingest-no-secret, ingest-wrong-secret,
+      ingest-empty-text, ingest-command-passthrough, webhook-unchanged). allowlist-still-gates FAILS as
+      written: a 'hello' update from 900000007 got the reflected reply 'Sorry, you are not allowed to use
+      this bot.' (HTTP 200), which does not contain the digits 900000007; U1's /export was unchanged (that
+      half passes). The refusal has not named the sender id since commit 3b89c3c ("remove user id from the
+      error", 2026-08-22, already in main); this branch does not touch it, and README.md/CLAUDE.md still
+      claim it does. Re-running the implementer cannot fix this without reversing that deliberate decision,
+      which is outside this spec's scope. Owner decision needed - either amend the criterion to drop
+      "contains the digits 900000007" (and fix the stale README/CLAUDE.md sentence), or restore the id in
+      the refusal. Security checklist PASS.
 ---
 
 # 0016 - Розділити ALLOWED_USERS на прод і тест; власник /ingest береться з нього

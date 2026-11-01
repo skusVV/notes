@@ -83,7 +83,7 @@ are visible at the deploy boundary rather than implied by code defaults.
 **`ALLOWED_USERS` gates every update.** A comma-separated list of Telegram user ids, parsed once in
 `TelegramService`'s constructor; unset or empty means everyone is allowed (and logs a warning at
 startup), which matches how `TELEGRAM_WEBHOOK_SECRET` behaves when unset. Non-allowed senders get a
-refusal message naming their own id rather than silence, and an update with no `from` is refused
+a plain refusal message (`Sorry, you are not allowed to use this bot.`, no id - commit 3b89c3c removed it) rather than silence, and an update with no `from` is refused
 whenever a list is configured. It travels via Secret Manager rather than `--set-env-vars` because
 that flag treats commas as its own separator - a list would be parsed as multiple env vars.
 Prod and test read **separate** lists: the `ALLOWED_USERS` env var is fed from the secret named by

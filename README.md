@@ -32,7 +32,7 @@ All sensitive values come from the environment, never from source:
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. Required. |
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
-| `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a refusal message naming their own id. Empty or unset allows everyone. **Order matters: the first valid id is the owner** that `/ingest/*` files text under, so put your own id first. Prod reads the secret `ALLOWED_USERS`, the test function reads `ALLOWED_USERS_TEST` (substitution `_ALLOWED_USERS_SECRET_NAME`). |
+| `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a plain refusal message (it does not include their id; the id is in the logs). Empty or unset allows everyone. **Order matters: the first valid id is the owner** that `/ingest/*` files text under, so put your own id first. Prod reads the secret `ALLOWED_USERS`, the test function reads `ALLOWED_USERS_TEST` (substitution `_ALLOWED_USERS_SECRET_NAME`). |
 | `REMINDER_SWEEP_SECRET` | Shared secret Cloud Scheduler sends in the `X-Sweep-Secret` header when it calls `POST /sweep`, the endpoint that delivers due reminders. **Unset disables `/sweep`** (it answers `401` and delivers nothing) - unlike the webhook secret, "not configured" fails closed. |
 | `INGEST_SECRET` | Shared secret for every `POST /ingest/*` endpoint, sent in the `X-Ingest-Secret` header (the iPhone quick-capture Shortcut, see step 9). **Unset disables `/ingest`** (it answers `401`), like `/sweep`. Text sent to `/ingest/message` is handled as if the first id in `ALLOWED_USERS` typed it in their private chat with the bot - taken from config, never from the request. With no valid id in `ALLOWED_USERS`, `/ingest` also answers `401`. |
 | `REMINDER_SWEEP_INTERVAL_MINUTES` | Optional, default `30`. The sweep's look-ahead: each tick delivers everything due before the next tick, so reminders fire up to this many minutes early rather than late. Keep it **equal to the Cloud Scheduler frequency**. |
@@ -47,7 +47,7 @@ All sensitive values come from the environment, never from source:
 | `PORT` | Local dev only. |
 
 To find your own user id, message the bot and read the `Received message from user <id>` line in
-the logs - the refusal message also states it, so an unlisted user can tell you what to add.
+the logs (`Denied user <id>: not in ALLOWED_USERS` for someone not yet on the list); the refusal message itself does not include it.
 
 Locally these are read from `.env` (git-ignored). In GCP the secrets are injected from Secret
 Manager and the non-secret settings from `--set-env-vars`, both in [cloudbuild.yaml](cloudbuild.yaml),
@@ -431,8 +431,8 @@ the verifier reads the matching ingest secret from `TEST_INGEST_SECRET` in `.env
   not retry the same update indefinitely. Failures are logged to Cloud Logging.
 - Every update logs the sender's Telegram user id (and `@username` when present) plus the chat id,
   so you can trace who talked to the bot in Cloud Logging.
-- When `ALLOWED_USERS` is set, anyone not on the list gets a refusal message stating their own user
-  id, and the attempt is logged as `Denied user <id>: not in ALLOWED_USERS`. Updates with no
+- When `ALLOWED_USERS` is set, anyone not on the list gets a plain refusal message (no id in the message),
+  and the attempt is logged with their user id as `Denied user <id>: not in ALLOWED_USERS`. Updates with no
   identifiable sender (channel posts, for example) are refused too. Changing the list means adding a
   new secret version and starting a new revision, since env-var secrets resolve at instance start.
 - **Every message is classified** into `note`, `reminder`, `symptom`, `question`, `actor_info`,

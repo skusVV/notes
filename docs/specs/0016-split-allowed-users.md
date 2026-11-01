@@ -1,6 +1,6 @@
 ---
 id: 0016-split-allowed-users
-state: BLOCKED
+state: IMPLEMENTED
 attempt: 1
 max_attempts: 3
 branch: feat/0016-split-allowed-users
@@ -18,7 +18,7 @@ acceptance:
   - id: ingest-command-passthrough
     assert: "POST /ingest/message with a valid secret and body {\"text\":\"/version\"} returns 200 and replies contains a string matching /^notes-bot \\d+\\.\\d+\\.\\d+$/"
   - id: allowlist-still-gates
-    assert: "POST a webhook update with text 'hello' from user id 900000007 (not in the test allowlist); the reflected reply is a refusal that contains the digits 900000007, and a '/export' from U1 is unchanged"
+    assert: "POST a webhook update with text 'hello' from user id 900000007 (not in the test allowlist); the reflected reply is exactly 'Sorry, you are not allowed to use this bot.', and a '/export' from U1 is unchanged"
   - id: webhook-unchanged
     assert: "POST / with a wrong X-Telegram-Bot-Api-Secret-Token returns 401; with the right one, '/version' from U1 returns 200 and a reflected reply matching /^notes-bot \\d+\\.\\d+\\.\\d+$/"
 failures:
@@ -129,7 +129,7 @@ ownerUserId(): number | undefined
   **ingest-command-passthrough**: як у 0013.
 - **ingest-owner-is-first-allowed-id:** нотатка з `/ingest/message` потрапляє до U1 (першого в списку),
   а не до U2.
-- **allowlist-still-gates:** id `900000007` (не в тестовому списку) отримує відмову.
+- **allowlist-still-gates:** id `900000007` (не в тестовому списку) отримує точно `Sorry, you are not allowed to use this bot.` (без id: так прибрано у 3b89c3c) і не змінює даних U1.
 - **webhook-unchanged:** вебхук Telegram поводиться як раніше.
 
 ## Out of scope

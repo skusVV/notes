@@ -34,6 +34,8 @@ All sensitive values come from the environment, never from source:
 | `TELEGRAM_WEBHOOK_SECRET` | Shared secret Telegram echoes back in the `X-Telegram-Bot-Api-Secret-Token` header. If unset, the check is skipped. |
 | `ALLOWED_USERS` | Comma-separated Telegram user ids allowed to use the bot, e.g. `111111111,222222222`. Anyone else gets a refusal message naming their own id. Empty or unset allows everyone. |
 | `REMINDER_SWEEP_SECRET` | Shared secret Cloud Scheduler sends in the `X-Sweep-Secret` header when it calls `POST /sweep`, the endpoint that delivers due reminders. **Unset disables `/sweep`** (it answers `401` and delivers nothing) - unlike the webhook secret, "not configured" fails closed. |
+| `INGEST_SECRET` | Shared secret for every `POST /ingest/*` endpoint, sent in the `X-Ingest-Secret` header (the iPhone quick-capture Shortcut, see step 9). **Unset disables `/ingest`** (it answers `401`), like `/sweep`. |
+| `INGEST_USER_ID` | The owner's Telegram user id. Text sent to `/ingest/message` is handled as if this user typed it in their private chat with the bot. Taken from config, never from the request. **Unset also disables `/ingest`.** Deployed via `--set-env-vars` from the trigger's `_INGEST_USER_ID` substitution. |
 | `REMINDER_SWEEP_INTERVAL_MINUTES` | Optional, default `30`. The sweep's look-ahead: each tick delivers everything due before the next tick, so reminders fire up to this many minutes early rather than late. Keep it **equal to the Cloud Scheduler frequency**. |
 | `GCP_PROJECT` | GCP project used for Vertex AI transcription/classification and Firestore. No API key involved. If unset, voice messages are refused politely, classification degrades to plain echo, and reminders are not stored - text echo keeps working. Set automatically on deploy. |
 | `FIRESTORE_DATABASE` | Firestore database id reminders are stored in. Code default `(default)`; deployed as `(default)` in production and `test` on the test function via `cloudbuild.yaml`, so the test lane never touches production data. |
@@ -114,6 +116,7 @@ comes up empty - Google renames the labels, not the ids.
 | `TELEGRAM_WEBHOOK_SECRET` | a random string of `A-Z a-z 0-9 _ -` only, e.g. from `openssl rand -hex 24` (keep a copy, you need it for `setWebhook`) |
 | `ALLOWED_USERS` | comma-separated Telegram user ids, e.g. `111111111,222222222` |
 | `REMINDER_SWEEP_SECRET` | another random string of `A-Z a-z 0-9 _ -`, e.g. from `openssl rand -hex 24` (keep a copy, the Cloud Scheduler job in step 8 sends it as a header) |
+| `INGEST_SECRET` | another random string of `A-Z a-z 0-9 _ -`, 32+ characters, e.g. from `openssl rand -hex 24` (keep a copy, the iPhone Shortcut in step 9 sends it as a header) |
 
 Stick to that character set for the webhook secret. Telegram rejects anything else in
 `secret_token`, and a value containing `&`, `#`, or `+` silently truncates when you paste it into
@@ -134,7 +137,11 @@ account, so there is no API key to store or rotate - just the IAM grant in step 
 
 The test lane needs its own copy of the sweep secret, `REMINDER_SWEEP_SECRET_TEST`, alongside
 `TELEGRAM_BOT_TOKEN_TEST` and `TELEGRAM_WEBHOOK_SECRET_TEST`, so verification can trigger a sweep on
-the test function without knowing the production value.
+the test function without knowing the production value. The same goes for `INGEST_SECRET_TEST`.
+
+Every secret named in `--set-secrets` must exist **before** the next deploy, or the build fails with
+`... versions/latest was not found`. That includes `INGEST_SECRET` (and `INGEST_SECRET_TEST` for
+the test trigger), even if you never set up the iPhone Shortcut.
 
 ### 3. Let the function read the secrets
 
@@ -256,7 +263,7 @@ select your repo.
 | Source | the repository you linked, branch `^main$` |
 | Configuration | **Cloud Build configuration file (yaml or json)** |
 | Location | Repository, file `cloudbuild.yaml` |
-| Substitution variables | optional: `_REGION` (default `europe-west1`), `_FUNCTION_NAME` (default `telegram-echo-bot`) |
+| Substitution variables | `_INGEST_USER_ID` = your Telegram user id (needed for step 9; left empty, `/ingest/*` answers `401`). Optional: `_REGION` (default `europe-west1`), `_FUNCTION_NAME` (default `telegram-echo-bot`) |
 | Service account | the one you granted roles to in step 4 |
 
 **Create**. From here on, every `git push origin main` makes Cloud Build deploy the function - the
@@ -357,6 +364,57 @@ change the other.
 
 Enabling the Cloud Scheduler API (`cloudscheduler.googleapis.com`) is offered inline the first time
 you open the page.
+
+## iPhone: quick note
+
+One press of the Action Button (or a double tap on the back of the phone), say a sentence, and it
+lands in the bot exactly as if you had typed it in the chat: it is classified, stored, and the reply
+arrives in Telegram. The phone only shows "Sent". This needs no knowledge of the code.
+
+### 9. Set up the quick-note Shortcut
+
+1. **Secret.** **Security -> Secret Manager -> Create secret**: name `INGEST_SECRET`, value a random
+   string of 32+ characters (`A-Z a-z 0-9 _ -`). On its **Permissions** tab -> **Grant access**, give
+   `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` the role **Secret Manager Secret
+   Accessor**. Then in **Cloud Build -> Triggers -> (your trigger) -> Edit**, add the substitution
+   variable `_INGEST_USER_ID` = your Telegram user id (see "To find your own user id" above), save,
+   and **Run** the trigger.
+2. **Address.** **Cloud Run functions -> `telegram-echo-bot` -> Trigger** tab, copy the function URL.
+   The Shortcut's full address is `<URL>/ingest/message`.
+3. **Shortcut.** On the iPhone open **Shortcuts** (Команди) -> **+**, name it "Нотатка" (or "Note").
+   Add these actions in order:
+   1. **Dictate Text** (Диктувати текст). Language: auto-detect if offered, otherwise Ukrainian.
+   2. **Get Contents of URL** (Отримати вміст URL):
+      - URL: `<URL>/ingest/message`
+      - Method: **POST**
+      - Headers: `X-Ingest-Secret` = the secret from step 1, `Content-Type` = `application/json`
+      - Request Body: **JSON**, one field `text` = the **Dictated Text** variable
+   3. **Show Notification** (Показати сповіщення): "Надіслано" ("Sent").
+4. **Bind it to a button** - one of:
+   - **Action Button** (iPhone 15 Pro and later, every 16 and 17): **Settings -> Action Button ->
+     Shortcut** -> pick "Нотатка".
+   - **Back Tap** (iPhone 8 and later): **Settings -> Accessibility -> Touch -> Back Tap -> Double
+     Tap** -> "Нотатка". A thick case can block it or cause false triggers.
+   - **Lock Screen widget**, or by voice: "Hey Siri, Нотатка" works on any model.
+5. **Check.** Run the Shortcut, say "тест нотатки", and the bot's reply should arrive in Telegram.
+6. **Keep the secret safe.** The secret lives inside the Shortcut, so never share the Shortcut via an
+   iCloud link. If the phone is lost: add a new version of `INGEST_SECRET` in Secret Manager, update
+   the Shortcut, and **Run** the trigger so a new revision picks it up.
+
+What the endpoint answers:
+
+| Situation | Response |
+| --- | --- |
+| missing or wrong `X-Ingest-Secret`, or `INGEST_SECRET` / `INGEST_USER_ID` not set | `401`, nothing processed |
+| `text` missing, not a string, empty after trimming, or longer than 4000 characters | `400` `{"ok":false,"error":"invalid_text"}` |
+| otherwise | `200` `{"ok":true}` - also when handling fails afterwards (the failure is logged) |
+
+A line that starts with `/` runs as a command, just like in the chat (`/version`, `/export`). The
+text still passes the `ALLOWED_USERS` gate, so `INGEST_USER_ID` must be on that list.
+
+For the test function, the `testing` trigger sets `_INGEST_SECRET_NAME=INGEST_SECRET_TEST` and
+`_INGEST_USER_ID=900000001`, and the verifier reads the matching value from `TEST_INGEST_SECRET` in
+`.env`.
 
 ## Behaviour notes
 

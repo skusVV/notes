@@ -367,6 +367,38 @@ export class TelegramService {
   }
 
   /**
+   * Text captured outside Telegram (`POST /ingest/message`), handled exactly as if the owner had
+   * typed it in the chat: it is wrapped in a synthetic private-chat update and fed to
+   * `handleUpdate`, so the allowlist gate, command routing, classification and storage all apply
+   * unchanged. In a private chat `chat.id` equals the user id, so the reply lands in the owner's
+   * chat. `userId` comes from config (`INGEST_USER_ID`), never from the request.
+   *
+   * `update_id` and `message_id` come from the real clock - unique per request. `update_id` is
+   * only ever logged, so a collision with a real Telegram id breaks nothing.
+   */
+  async handleIngestedText(
+    userId: number,
+    text: string,
+    sink?: string[],
+    nowOverride?: string,
+  ): Promise<void> {
+    const stamp = this.clock.now().getTime();
+    await this.handleUpdate(
+      {
+        update_id: stamp,
+        message: {
+          message_id: stamp,
+          chat: { id: userId },
+          from: { id: userId, is_bot: false },
+          text,
+        },
+      },
+      sink,
+      nowOverride,
+    );
+  }
+
+  /**
    * Handles a reply to the open actor question, and reports whether it was one. Returns false for
    * every other reply - no open question, an expired one, or a different message id - so an
    * ordinary message that happens to be a reply is processed normally rather than swallowed.

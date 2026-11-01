@@ -22,5 +22,7 @@ import { TelegramService } from './telegram.service';
   ],
   controllers: [TelegramController],
   providers: [TelegramService, SweeperService],
+  // IngestModule feeds phone-captured text through the same handleUpdate path as a chat message.
+  exports: [TelegramService],
 })
 export class TelegramModule {}

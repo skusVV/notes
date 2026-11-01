@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ActorsModule } from './actors/actors.module';
 import { ClockModule } from './clock/clock.module';
 import { FirestoreModule } from './firestore/firestore.module';
+import { IngestModule } from './ingest/ingest.module';
 import { NotesModule } from './notes/notes.module';
 import { RemindersModule } from './reminders/reminders.module';
 import { SymptomsModule } from './symptoms/symptoms.module';
@@ -20,6 +21,7 @@ import { TelegramModule } from './telegram/telegram.module';
     NotesModule,
     SymptomsModule,
     TelegramModule,
+    IngestModule,
   ],
 })
 export class AppModule {}

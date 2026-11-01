@@ -74,7 +74,7 @@ environment. Adding a new secret means four steps: `.env.example`, a new secret 
 Manager UI, the `--set-secrets` list in `cloudbuild.yaml`, and a **Secret Manager Secret Accessor**
 grant to `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` on that secret (see
 [README.md](README.md)). The Secret Manager secrets are named `TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_WEBHOOK_SECRET`, and `ALLOWED_USERS`, matching the env vars; those names are case-sensitive and referenced
+`TELEGRAM_WEBHOOK_SECRET`, `ALLOWED_USERS`, and `INGEST_SECRET`, matching the env vars; those names are case-sensitive and referenced
 literally by `--set-secrets`, so a mismatch fails the deploy with `... versions/latest was not
 found`. Non-secret settings (`GCP_PROJECT`, `VERTEX_LOCATION`, `TRANSCRIPTION_MODEL`,
 `MAX_VOICE_SECONDS`) travel via `--set-env-vars` in the same file instead, so the deployed values
@@ -168,6 +168,22 @@ a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never pro
 compare); everything else gets `200` even when handling throws, so Telegram does not retry the same
 update indefinitely. Failures are logged instead. Preserve this - returning 5xx to Telegram causes
 retry storms.
+
+**`/ingest/*` is the owner's own devices posting in** ([src/ingest/](src/ingest/)). `POST
+/ingest/message` (the iPhone quick-capture Shortcut) wraps `{ "text" }` in a synthetic private-chat
+update via `TelegramService.handleIngestedText` and calls `handleUpdate`, so it takes exactly the
+chat path - `ALLOWED_USERS` gate, command routing, classification, storage, reply in Telegram. Do not
+give it a shortcut around `handleUpdate`. The user is `INGEST_USER_ID` from config, never from the
+body, so the caller cannot claim to be someone else. `IngestGuard.assertIngestSecret` is the shared
+check every future `/ingest/*` endpoint (calendar, health sync) reuses: `X-Ingest-Secret` against
+`INGEST_SECRET`, timing-safe, lengths-only logging, and it **fails closed** - with `INGEST_SECRET`
+or `INGEST_USER_ID` unset the endpoint answers `401`, the opposite of the webhook's skip-when-unset.
+Unlike the webhook, a bad `text` is a `400` (the caller is a Shortcut that benefits from seeing it,
+and there is no Telegram retry loop), but a failure *after* validation is still logged and `200`.
+Ingested text is never logged, only the user id. `INGEST_SECRET` followed the same four steps as any
+new secret (`.env.example`, a Secret Manager secret, `--set-secrets` via the `_INGEST_SECRET_NAME`
+substitution, the accessor grant); `INGEST_USER_ID` rides `--set-env-vars` via `_INGEST_USER_ID`,
+which is set per trigger rather than in the file because the id differs between test and prod.
 
 **Deploy pipeline.** Push to the trigger's branch -> Cloud Build runs `cloudbuild.yaml` -> a single
 `gcloud functions deploy --gen2 --source=.` **inside the build container** - the deploy command

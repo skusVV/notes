@@ -1,6 +1,6 @@
 ---
 id: 0017-ingest-user-id
-state: IN-TESTING
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0017-ingest-user-id

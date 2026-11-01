@@ -21,7 +21,7 @@ and mark `DONE` with no human in the loop - is [/implement-spec](../implement-sp
 
 1. Resolve the spec id from the argument to `docs/specs/<id>.md`. If it is missing or its `state` is
    not `IMPLEMENTED`, stop and tell the user why.
-2. Confirm `TEST_URL` and `TEST_WEBHOOK_SECRET` are available - they live in the git-ignored
+2. Confirm `TEST_URL` and `TEST_WEBHOOK_SECRET` (plus `TEST_INGEST_SECRET` for `/ingest/*` specs) are available - they live in the git-ignored
    [.env](../../../.env), not in the shell environment, so source it (e.g. `set -a; source .env; set
    +a`) rather than asking the user to export them. Only stop and ask the user if `.env` itself is
    missing those keys.

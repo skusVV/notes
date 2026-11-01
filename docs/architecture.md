@@ -636,6 +636,7 @@ one pass - and the mentions it needs were captured since phase 1.
 | **Photos** | A prescription, a lab result, a whiteboard. Gemini is already multimodal: same pipeline, one new branch, `source: 'photo'`. | Medium |
 | **Recurring reminders / medication** | Natural once reminders exist - and the thing that makes the daylight-saving decision start to matter. | Medium |
 | **Symptom correlation** | "Headaches cluster the day after a late night." Genuinely interesting, but be honest: correlation over a few dozen events for one person is very easy to over-read. Present as "worth noticing", never as a finding. | Later |
+| **Ask-then-research agent** | The third phase of recall. After finding what you said about a topic ("that new app I mentioned a few weeks ago"), the bot goes to the web with tools to *act on it* - "check whether anyone has built such an app yet" - and folds the research into the answer. Turns recall from read-only into an agent with tools. Its own feature, sequenced after semantic recall (phase 2). | Later |
 
 ---
 

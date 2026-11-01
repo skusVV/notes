@@ -57,7 +57,7 @@ Before returning, confirm all of these:
 
 1. **Load and gate.** Read `docs/specs/<id>.md`. Require `state: IMPLEMENTED`. Check `.testing-lock`:
    if held by another spec, stop and report (wait for the lane); if free, write it with this spec id.
-   Source `.env` (`set -a; source .env; set +a`) to get `TEST_URL` and `TEST_WEBHOOK_SECRET` - they
+   Source `.env` (`set -a; source .env; set +a`) to get `TEST_URL`, `TEST_WEBHOOK_SECRET` and (for `/ingest/*` specs) `TEST_INGEST_SECRET`, sent as `X-Ingest-Secret` - they
    are git-ignored config, not shell exports, so read them from there rather than asking the user.
 2. **Enter the lane.** `git checkout testing && git reset --hard feat/<id> && git push --force origin
    testing`. Set `state: IN-TESTING`. Pushing triggers the `testing` Cloud Build trigger - you never

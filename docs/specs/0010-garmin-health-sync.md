@@ -11,6 +11,12 @@ failures: []
 
 # 0010 - Garmin health sync (ingester + token lifecycle)
 
+> **КОНФЛІКТ З 0015.** [0015 (Apple Health)](0015-apple-health-sync.md) дає ті самі дані (сон, пульс
+> спокою, HRV, кроки) з іншого джерела. Власник вирішив тримати обидва спеки, але **перед будь-якою
+> імплементацією цього спеку або 0015 Claude має попередити, що їх два, і вимагати рішення, який
+> робити** (див. розділ "Два спеки на одні дані" у 0015). Не починати лише тому, що власник сказав
+> "робимо 0010".
+
 > **Delivery track: manual, NOT `/implement-spec`.** Every other spec here is TypeScript on the
 > NestJS bot, verified over HTTP against the isolated test Cloud Function
 > ([README.md](README.md)). This one is a **separate Python service** with an **external credential**

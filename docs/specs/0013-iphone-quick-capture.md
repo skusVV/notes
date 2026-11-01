@@ -28,6 +28,10 @@ failures: []
 
 > **READY** (власник, 2026-11-01). Критерії зафіксовано, назва ендпоінта - `/ingest/message`. Питання в
 > кінці розділу "Відкриті питання" не блокують імплементацію: це перевірки на телефоні.
+>
+> **Примітка (0016):** рішення про окрему змінну для власника `/ingest` замінено специфікацією
+> [0016](0016-split-allowed-users.md): власник - **перший id у `ALLOWED_USERS`**, окремої змінної більше
+> немає, а прод і тест читають різні списки (`ALLOWED_USERS` / `ALLOWED_USERS_TEST`).
 
 ## Context
 
@@ -53,10 +57,10 @@ failures: []
    `ALLOWED_USERS`, класифікація, збереження і відповідь працюють рівно так, як для чату.
 2. **Відповідь - у Telegram**, як зазвичай (рішення власника). Команда на телефоні нічого не
    показує, окрім короткого "Надіслано".
-3. **Один власник.** Користувач береться зі змінної `INGEST_USER_ID`, а не з тіла запиту. Телефон не
+3. **Один власник.** Користувач - перший id у `ALLOWED_USERS` (з 0016), а не з тіла запиту. Телефон не
    може заявити "я інший користувач". Приватний чат Telegram має `chat.id == user id`, тому відповідь
    іде туди ж.
-4. **Закрито за замовчуванням (fail closed).** Якщо `INGEST_SECRET` або `INGEST_USER_ID` не задані,
+4. **Закрито за замовчуванням (fail closed).** Якщо `INGEST_SECRET` не задано або немає першого id у `ALLOWED_USERS`,
    ендпоінт відповідає `401`, як `/sweep` без `REMINDER_SWEEP_SECRET`
    ([../../CLAUDE.md](../../CLAUDE.md)). Не так, як вебхук Telegram, де порожній секрет пропускає перевірку.
 5. **Лише текст.** Share sheet (посилання, скріншот) - окремий спек (див. Out of scope).
@@ -69,11 +73,10 @@ failures: []
 - `src/ingest/ingest.module.ts` - **новий**, підключити в `AppModule`.
 - `src/telegram/telegram.service.ts` - публічний метод `handleIngestedText(userId, text, sink?,
   nowOverride?)`, що будує синтетичне оновлення і викликає `handleUpdate`. Існуючу логіку не міняти.
-- `.env.example` - `INGEST_SECRET`, `INGEST_USER_ID`, `TEST_INGEST_SECRET`.
-- `cloudbuild.yaml` - `INGEST_SECRET=${_INGEST_SECRET_NAME}:latest` у `--set-secrets`; `INGEST_USER_ID=${_INGEST_USER_ID_SECRET_NAME}:latest`
-  теж у `--set-secrets` (id власника лежить у Secret Manager, не в тригері, окремо для проду і тесту).
-  Підстановки `_INGEST_SECRET_NAME: INGEST_SECRET` і `_INGEST_USER_ID_SECRET_NAME: INGEST_USER_ID`; коментар
-  для тригера `testing`: `_INGEST_SECRET_NAME=INGEST_SECRET_TEST  _INGEST_USER_ID_SECRET_NAME=INGEST_USER_ID_TEST`.
+- `.env.example` - `INGEST_SECRET`, `TEST_INGEST_SECRET` (власник - перший id у `ALLOWED_USERS`, з 0016).
+- `cloudbuild.yaml` - `INGEST_SECRET=${_INGEST_SECRET_NAME}:latest` у `--set-secrets`; підстановка
+  `_INGEST_SECRET_NAME: INGEST_SECRET`, коментар для тригера `testing`: `_INGEST_SECRET_NAME=INGEST_SECRET_TEST`.
+  Власник - перший id у `ALLOWED_USERS` (з 0016: окремий список на функцію через `_ALLOWED_USERS_SECRET_NAME`).
 - `.claude/agents/spec-verifier/AGENT.md`, `.claude/skills/verify-spec/SKILL.md`, `.claude/skills/implement-spec/SKILL.md` -
   лише згадка, що верифікатор бере `TEST_INGEST_SECRET` з `.env` поряд із `TEST_WEBHOOK_SECRET`.
 - `README.md` - **розділ "iPhone: швидка нотатка"** (див. нижче) і кроки створення секрету.
@@ -92,7 +95,7 @@ failures: []
 
 | Ситуація | Відповідь |
 |---|---|
-| секрет відсутній/хибний, або `INGEST_SECRET`/`INGEST_USER_ID` не задані | `401`, нічого не оброблено |
+| секрет відсутній/хибний, `INGEST_SECRET` не задано, або немає першого id у `ALLOWED_USERS` | `401`, нічого не оброблено |
 | `text` відсутній, не рядок, порожній після `trim`, або довший за `INGEST_MAX_TEXT_CHARS` (4000) | `400` `{ "ok": false, "error": "invalid_text" }` |
 | все гаразд | `200` `{ "ok": true }` |
 
@@ -109,8 +112,8 @@ failures: []
 
 ### Синтетичне оновлення
 
-`update_id` береться з годинника (унікальний на запит), `message_id` так само, `chat.id == from.id ==
-INGEST_USER_ID`, `from.is_bot == false`, `text` - з тіла. `update_id` у коді використовується лише в
+`update_id` береться з годинника (унікальний на запит), `message_id` так само, `chat.id` і `from.id` -
+перший id у `ALLOWED_USERS`, `from.is_bot == false`, `text` - з тіла. `update_id` у коді використовується лише в
 логах, тож колізії з реальними id Telegram нічого не ламають.
 
 ### Конфігурація
@@ -118,7 +121,7 @@ INGEST_USER_ID`, `from.is_bot == false`, `text` - з тіла. `update_id` у к
 | Змінна | Звідки | Зміст |
 |---|---|---|
 | `INGEST_SECRET` | Secret Manager | Спільний секрет для всіх `/ingest/*`. Довгий випадковий рядок. |
-| `INGEST_USER_ID` | Secret Manager | Telegram user id власника (прод і тест мають свої секрети). |
+| перший id у `ALLOWED_USERS` | Secret Manager | Telegram user id власника (з 0016; прод і тест мають свої списки). |
 | `INGEST_MAX_TEXT_CHARS` | код, за замовч. 4000 | Ліміт довжини. |
 
 ## Налаштування на телефоні (текст для README, Cloud Console + iOS)
@@ -127,7 +130,7 @@ README отримує розділ, який можна виконати, не �
 
 1. **Секрет.** Console > Security > Secret Manager > Create secret: ім'я `INGEST_SECRET`, значення -
    випадковий рядок із 32+ символів. Дати `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` роль
-   Secret Manager Secret Accessor на цей секрет. Додати `INGEST_USER_ID` у змінні деплою.
+   Secret Manager Secret Accessor на цей секрет. Власник - перший id у `ALLOWED_USERS` (з 0016).
 2. **Адреса.** Console > Cloud Run functions > `telegramBot` > вкладка Trigger > скопіювати URL
    функції. Повна адреса команди: `<URL>/ingest/message`.
 3. **Команда.** iPhone > Команди > "+" > назва "Нотатка". Дії по черзі:
@@ -157,7 +160,7 @@ README отримує розділ, який можна виконати, не �
 
 ## Acceptance criteria (locked at READY)
 
-Припущення верифікатора: на тестовій функції `INGEST_USER_ID` = U1 (`900000001`, один із шести дозволених тестових id), задано
+Припущення верифікатора: на тестовій функції перший id у `ALLOWED_USERS` = U1 (`900000001`, з 0016), задано
 `INGEST_SECRET` і `TEST_REFLECT_REPLY=true`.
 
 - **health:** `GET /` повертає `200` і `{"status":"ok"}`.

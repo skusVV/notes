@@ -26,13 +26,14 @@ const configOf = (env: Env) => ({ get: (key: string): string | undefined => env[
 function makeController(env: Env = {}) {
   const config = configOf({
     INGEST_SECRET: SECRET,
-    INGEST_USER_ID: String(OWNER),
     TEST_REFLECT_REPLY: 'false',
     ...env,
   });
+  // The owner comes from a real TelegramService, the first id in ALLOWED_USERS; handling is mocked.
+  const ownerSource = makeService({ ALLOWED_USERS: `${OWNER},900000002`, ...env });
   const telegram = { handleIngestedText: vi.fn().mockResolvedValue(undefined) };
   const controller = new IngestController(
-    new IngestGuard(config as never),
+    new IngestGuard(config as never, ownerSource),
     telegram as never,
     config as never,
   );
@@ -77,8 +78,12 @@ describe('POST /ingest/message auth', () => {
     );
   });
 
-  it('fails closed when INGEST_SECRET or INGEST_USER_ID is not configured', async () => {
-    for (const env of [{ INGEST_SECRET: undefined }, { INGEST_USER_ID: undefined }]) {
+  it('fails closed when INGEST_SECRET is unset or ALLOWED_USERS has no valid id', async () => {
+    for (const env of [
+      { INGEST_SECRET: undefined },
+      { ALLOWED_USERS: '' },
+      { ALLOWED_USERS: 'x' },
+    ]) {
       const unconfigured = makeController(env);
       await expect(
         unconfigured.controller.message(SECRET, undefined, { text: 'hello' }),
@@ -134,7 +139,7 @@ describe('POST /ingest/message validation', () => {
 });
 
 describe('POST /ingest/message handling', () => {
-  it('passes the trimmed text and the configured owner id, with no reflection in production', async () => {
+  it('passes the trimmed text and the first ALLOWED_USERS id, with no reflection in production', async () => {
     const made = makeController();
 
     const body = await made.controller.message(` ${SECRET}\n`, '2026-09-16T09:45:00+03:00', {

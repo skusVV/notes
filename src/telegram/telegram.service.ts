@@ -275,6 +275,19 @@ export class TelegramService {
     return from !== undefined && this.allowedUsers.has(from.id);
   }
 
+  /**
+   * The owner `/ingest/*` acts as: the first valid id in `ALLOWED_USERS`, in the order written
+   * (a Set keeps insertion order, and invalid entries were already dropped by `parseAllowedUsers`).
+   * Undefined when the list is unset, empty, or has no valid id - the ingest guard then fails
+   * closed rather than guessing an owner.
+   */
+  ownerUserId(): number | undefined {
+    for (const id of this.allowedUsers) {
+      return id;
+    }
+    return undefined;
+  }
+
   // `sink`, when provided, collects every reply this update produces. The test function passes one
   // (via TEST_REFLECT_REPLY) so the verifier can read replies straight from the HTTP response
   // without a GCP identity; production passes nothing and behaviour is unchanged.
@@ -371,7 +384,7 @@ export class TelegramService {
    * typed it in the chat: it is wrapped in a synthetic private-chat update and fed to
    * `handleUpdate`, so the allowlist gate, command routing, classification and storage all apply
    * unchanged. In a private chat `chat.id` equals the user id, so the reply lands in the owner's
-   * chat. `userId` comes from config (`INGEST_USER_ID`), never from the request.
+   * chat. `userId` is `ownerUserId()` (the first id in `ALLOWED_USERS`), never from the request.
    *
    * `update_id` and `message_id` come from the real clock - unique per request. `update_id` is
    * only ever logged, so a collision with a real Telegram id breaks nothing.

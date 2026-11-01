@@ -1,6 +1,6 @@
 ---
 id: 0016-split-allowed-users
-state: READY
+state: IMPLEMENTED
 attempt: 0
 max_attempts: 3
 branch: feat/0016-split-allowed-users

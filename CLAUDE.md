@@ -86,6 +86,11 @@ startup), which matches how `TELEGRAM_WEBHOOK_SECRET` behaves when unset. Non-al
 refusal message naming their own id rather than silence, and an update with no `from` is refused
 whenever a list is configured. It travels via Secret Manager rather than `--set-env-vars` because
 that flag treats commas as its own separator - a list would be parsed as multiple env vars.
+Prod and test read **separate** lists: the `ALLOWED_USERS` env var is fed from the secret named by
+`_ALLOWED_USERS_SECRET_NAME` (`ALLOWED_USERS` in prod, normally just the owner's id;
+`ALLOWED_USERS_TEST` on the test function, the six synthetic `9000000xx` ids then the owner). **Order
+in the list is significant: the first valid id is the owner** that `/ingest/*` acts as
+(`TelegramService.ownerUserId()`), so reordering the secret changes who ingested text is filed under.
 
 **Transcription is behind an outcome-named boundary.** `TranscriptionService`
 ([src/transcription/transcription.service.ts](src/transcription/transcription.service.ts)) exposes
@@ -173,18 +178,18 @@ retry storms.
 /ingest/message` (the iPhone quick-capture Shortcut) wraps `{ "text" }` in a synthetic private-chat
 update via `TelegramService.handleIngestedText` and calls `handleUpdate`, so it takes exactly the
 chat path - `ALLOWED_USERS` gate, command routing, classification, storage, reply in Telegram. Do not
-give it a shortcut around `handleUpdate`. The user is `INGEST_USER_ID` from config, never from the
-body, so the caller cannot claim to be someone else. `IngestGuard.assertIngestSecret` is the shared
+give it a shortcut around `handleUpdate`. The user is `TelegramService.ownerUserId()` - the first
+valid id in `ALLOWED_USERS` - never from the body, so the caller cannot claim to be someone else. `IngestGuard.assertIngestSecret` is the shared
 check every future `/ingest/*` endpoint (calendar, health sync) reuses: `X-Ingest-Secret` against
 `INGEST_SECRET`, timing-safe, lengths-only logging, and it **fails closed** - with `INGEST_SECRET`
-or `INGEST_USER_ID` unset the endpoint answers `401`, the opposite of the webhook's skip-when-unset.
+unset, or no valid id in `ALLOWED_USERS` to act as owner, the endpoint answers `401`, the opposite of
+the webhook's skip-when-unset.
 Unlike the webhook, a bad `text` is a `400` (the caller is a Shortcut that benefits from seeing it,
 and there is no Telegram retry loop), but a failure *after* validation is still logged and `200`.
 Ingested text is never logged, only the user id. `INGEST_SECRET` followed the same four steps as any
 new secret (`.env.example`, a Secret Manager secret, `--set-secrets` via the `_INGEST_SECRET_NAME`
-substitution, the accessor grant); `INGEST_USER_ID` is a Secret Manager secret too (`INGEST_USER_ID` in prod, `INGEST_USER_ID_TEST` on
-the test function, chosen by `_INGEST_USER_ID_SECRET_NAME`), so the owner id never sits in a trigger and
-test and prod stay separate.
+substitution, the accessor grant). There is no separate owner-id setting: the owner comes from the
+per-function `ALLOWED_USERS` list, so it never sits in a trigger and test and prod stay separate.
 
 **Deploy pipeline.** Push to the trigger's branch -> Cloud Build runs `cloudbuild.yaml` -> a single
 `gcloud functions deploy --gen2 --source=.` **inside the build container** - the deploy command

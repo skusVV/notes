@@ -27,10 +27,12 @@ steps:
       # comma-separated value cannot collide with the comma that separates entries in this flag.
       # REMINDER_SWEEP_SECRET authenticates the Cloud Scheduler tick that hits POST /sweep. Unset,
       # that endpoint is disabled, so no reminder is ever delivered.
-      # INGEST_SECRET authenticates POST /ingest/* (the iPhone quick-capture Shortcut). Unset, those
-      # endpoints answer 401. INGEST_USER_ID is the owner /ingest/* acts as; it is a secret too, so the
-      # prod and test functions each read their own (the id differs) and it never sits in a trigger.
-      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=ALLOWED_USERS:latest,REMINDER_SWEEP_SECRET=${_SWEEP_SECRET_NAME}:latest,INGEST_SECRET=${_INGEST_SECRET_NAME}:latest,INGEST_USER_ID=${_INGEST_USER_ID_SECRET_NAME}:latest
+      # ALLOWED_USERS is read from a per-function secret (_ALLOWED_USERS_SECRET_NAME): prod holds only
+      # the owner's id, the test function the synthetic test ids plus the owner. Order matters - the
+      # FIRST id in the list is the owner POST /ingest/* acts as.
+      # INGEST_SECRET authenticates POST /ingest/* (the iPhone quick-capture Shortcut). Unset, or
+      # with no valid id in ALLOWED_USERS, those endpoints answer 401.
+      - --set-secrets=TELEGRAM_BOT_TOKEN=${_TOKEN_SECRET}:latest,TELEGRAM_WEBHOOK_SECRET=${_WEBHOOK_SECRET_NAME}:latest,ALLOWED_USERS=${_ALLOWED_USERS_SECRET_NAME}:latest,REMINDER_SWEEP_SECRET=${_SWEEP_SECRET_NAME}:latest,INGEST_SECRET=${_INGEST_SECRET_NAME}:latest
       # Not secret, so plain env vars. Transcription needs no API key: the function calls Vertex AI
       # as its own runtime service account. It only needs to know which project and endpoint to
       # talk to. Declared here rather than left to code defaults so the model id is visible and
@@ -93,13 +95,13 @@ substitutions:
   #   _FUNCTION_NAME=telegram-echo-bot-test  _TOKEN_SECRET=TELEGRAM_BOT_TOKEN_TEST
   #   _WEBHOOK_SECRET_NAME=TELEGRAM_WEBHOOK_SECRET_TEST  _REPLY_REFLECT=true  _FIRESTORE_DB=test
   #   _SWEEP_SECRET_NAME=REMINDER_SWEEP_SECRET_TEST  _SWEEP_JOB_NAME=reminder-sweep-test
-  #   _INGEST_SECRET_NAME=INGEST_SECRET_TEST  _INGEST_USER_ID_SECRET_NAME=INGEST_USER_ID_TEST
+  #   _INGEST_SECRET_NAME=INGEST_SECRET_TEST  _ALLOWED_USERS_SECRET_NAME=ALLOWED_USERS_TEST
   _TOKEN_SECRET: TELEGRAM_BOT_TOKEN
   _WEBHOOK_SECRET_NAME: TELEGRAM_WEBHOOK_SECRET
   _SWEEP_SECRET_NAME: REMINDER_SWEEP_SECRET
   _SWEEP_JOB_NAME: reminder-sweep
   _INGEST_SECRET_NAME: INGEST_SECRET
-  _INGEST_USER_ID_SECRET_NAME: INGEST_USER_ID
+  _ALLOWED_USERS_SECRET_NAME: ALLOWED_USERS
   _REPLY_REFLECT: 'false'
   _FIRESTORE_DB: '(default)'
 

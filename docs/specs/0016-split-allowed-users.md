@@ -1,6 +1,6 @@
 ---
 id: 0016-split-allowed-users
-state: IMPLEMENTED
+state: IN-TESTING
 attempt: 1
 max_attempts: 3
 branch: feat/0016-split-allowed-users

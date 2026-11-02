@@ -85,8 +85,12 @@ the Console home dashboard) - you need it for the service account names below.
 
 **APIs & Services -> Library**, then search for and **Enable** each of:
 Cloud Functions API, Cloud Run Admin API, Cloud Build API, Artifact Registry API,
-Secret Manager API, Cloud Logging API, **Cloud Resource Manager API**, **Vertex AI API**
-(`aiplatform.googleapis.com`).
+Secret Manager API, Cloud Logging API, **Cloud Resource Manager API**, **Cloud Scheduler API**
+(`cloudscheduler.googleapis.com`), **Vertex AI API** (`aiplatform.googleapis.com`).
+
+**Cloud Scheduler API** is used by the build's `schedule-sweep` step, which runs *after* the function
+is already deployed. Without it the build goes red at that step and the reminder tick never exists,
+even though the function itself is live.
 
 **Cloud Resource Manager API** is easy to miss and fails confusingly: the deploy resolves your
 project id to a project number via `cloudresourcemanager.projects.get`, and without it the build
@@ -114,7 +118,7 @@ comes up empty - Google renames the labels, not the ids.
 | `TELEGRAM_BOT_TOKEN` | the token @BotFather gave you |
 | `TELEGRAM_WEBHOOK_SECRET` | a random string of `A-Z a-z 0-9 _ -` only, e.g. from `openssl rand -hex 24` (keep a copy, you need it for `setWebhook`) |
 | `ALLOWED_USERS` | comma-separated Telegram user ids, in any order, e.g. `111111111,222222222`. For a single-user bot, just your own id |
-| `REMINDER_SWEEP_SECRET` | another random string of `A-Z a-z 0-9 _ -`, e.g. from `openssl rand -hex 24` (keep a copy, the Cloud Scheduler job in step 8 sends it as a header) |
+| `REMINDER_SWEEP_SECRET` | another random string of `A-Z a-z 0-9 _ -`, e.g. from `openssl rand -hex 24` (keep a copy; the build's `schedule-sweep` step reads it and puts it in the Cloud Scheduler job's header) |
 | `INGEST_SECRET` | another random string of `A-Z a-z 0-9 _ -`, 32+ characters, e.g. from `openssl rand -hex 24` (keep a copy, the iPhone Shortcut in step 9 sends it as a header) |
 
 Stick to that character set for the webhook secret. Telegram rejects anything else in
@@ -161,6 +165,13 @@ For each of the secrets: open it in Secret Manager, go to the **Permissions** ta
 
 Save. This is the runtime service account of the deployed function; without this the function
 starts and immediately fails to boot.
+
+Do this for `REMINDER_SWEEP_SECRET` too (and `REMINDER_SWEEP_SECRET_TEST` for the test lane). That
+secret is read twice: by the function at boot, and by the build's `schedule-sweep` step through
+`availableSecrets` in [cloudbuild.yaml](cloudbuild.yaml). On current projects the build runs as the
+same `<PROJECT_NUMBER>-compute@...` account, so one grant covers both. If your trigger uses a
+different build service account, grant **Secret Manager Secret Accessor** on this secret to that
+account as well, or the step fails with a permission error on `versions/latest`.
 
 ### 3b. Let the function call Vertex AI
 
@@ -251,6 +262,9 @@ fails on permissions.
 - Service Account User
 - Artifact Registry Writer
 - Logs Writer
+- **Cloud Scheduler Admin** (`roles/cloudscheduler.admin`) - the `schedule-sweep` step creates or
+  updates the sweep job with `gcloud scheduler jobs create/update http`. Without it the build fails
+  with `PERMISSION_DENIED` on `cloudscheduler.jobs.create`, after the function has already deployed.
 
 ### 5. Connect the GitHub repository
 
@@ -271,7 +285,7 @@ select your repo.
 | Source | the repository you linked, branch `^main$` |
 | Configuration | **Cloud Build configuration file (yaml or json)** |
 | Location | Repository, file `cloudbuild.yaml` |
-| Substitution variables | (nothing to set for prod: `_ALLOWED_USERS_SECRET_NAME` and `_INGEST_SECRET_NAME` default to `ALLOWED_USERS` and `INGEST_SECRET`). Optional: `_REGION` (default `europe-west1`), `_FUNCTION_NAME` (default `telegram-echo-bot`) |
+| Substitution variables | (nothing to set for prod: `_ALLOWED_USERS_SECRET_NAME` and `_INGEST_SECRET_NAME`, `_SWEEP_SECRET_NAME` and `_SWEEP_JOB_NAME` default to `ALLOWED_USERS`, `INGEST_SECRET`, `REMINDER_SWEEP_SECRET` and `reminder-sweep`). Optional: `_REGION` (default `europe-west1`), `_FUNCTION_NAME` (default `telegram-echo-bot`) |
 | Service account | the one you granted roles to in step 4 |
 
 **Create**. From here on, every `git push origin main` makes Cloud Build deploy the function - the
@@ -340,38 +354,39 @@ registration any time with `https://api.telegram.org/bot<BOT_TOKEN>/getWebhookIn
 The function URL is stable across redeploys, so this only has to be done again if you change the
 secret, the function name, or the region.
 
-### 8. Schedule the reminder sweep
+### 8. The reminder sweep schedule (created by the build)
 
-Nothing delivers a reminder until something calls `POST /sweep` on a schedule. **Cloud Scheduler ->
-Create job**:
+Nothing delivers a reminder until something calls `POST /sweep` on a schedule. **You do not create
+that schedule by hand.** The `schedule-sweep` step in [cloudbuild.yaml](cloudbuild.yaml) runs after
+every deploy and creates the Cloud Scheduler job if it is missing, or updates it if it exists:
 
-| Field | Value |
+| Field | Value (set by the pipeline) |
 | --- | --- |
-| Name | `reminder-sweep` |
-| Region | `europe-west1` (the same region as the function) |
-| Frequency | `*/30 * * * *` |
-| Timezone | `Europe/Kyiv` |
-| Target type | **HTTP** |
-| URL | the function URL from step 7 with `/sweep` appended, e.g. `https://telegram-echo-bot-....run.app/sweep` |
-| HTTP method | **POST** |
-| Auth header | **None** (the shared secret below is the authentication) |
+| Name | `reminder-sweep` (`reminder-sweep-test` on the test function) |
+| Region | same as the function (`europe-west1`) |
+| Frequency | `*/30 * * * *`, timezone `Europe/Kyiv` |
+| Target | `POST <function URL>/sweep` |
+| Header | `X-Sweep-Secret` = the latest `REMINDER_SWEEP_SECRET` value |
 
-Then **Show more -> Add header**:
+Because the step overwrites the job on every deploy, **do not edit the job in the Console** - the
+next push reverts the change. To change the frequency, edit `--schedule` in `cloudbuild.yaml` and
+`REMINDER_SWEEP_INTERVAL_MINUTES` together. Rotating the secret needs only a new secret version and
+a **Run** of the trigger: the build rewrites the header and the new revision picks up the value. If
+the job is deleted, the next deploy recreates it.
 
-- Name: `X-Sweep-Secret`
-- Value: the `REMINDER_SWEEP_SECRET` value from step 2
+This step needs three things from earlier steps, and fails after the function is already deployed
+if any is missing: the **Cloud Scheduler API** (step 1), the **Cloud Scheduler Admin** role on the
+build's service account (step 4), and **Secret Manager Secret Accessor** on `REMINDER_SWEEP_SECRET`
+(step 3).
 
-Click **Create**, then **Force run** once and check **Cloud Logging** for a `Sweep found 0 due
-reminder(s)` line. A `401` means the header value does not match the secret the function booted
-with; a new secret version only reaches the function on a new revision.
+To verify after the first successful build: **Cloud Scheduler**, region `europe-west1`, select
+`reminder-sweep`, **Force run**, and check **Cloud Logging** for a `Sweep found 0 due reminder(s)`
+line. A `401` means the header does not match the secret the function booted with; a new secret
+version only reaches the function on a new revision.
 
 The frequency and `REMINDER_SWEEP_INTERVAL_MINUTES` must stay **equal**. The sweep looks ahead one
 interval and delivers everything due before the next tick, so a cron slower than the interval leaves
-reminders late, and a faster one re-runs the same window (harmless, just wasted calls). Change one,
-change the other.
-
-Enabling the Cloud Scheduler API (`cloudscheduler.googleapis.com`) is offered inline the first time
-you open the page.
+reminders late, and a faster one re-runs the same window (harmless, just wasted calls).
 
 ## iPhone: quick note
 

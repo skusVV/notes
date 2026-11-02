@@ -162,7 +162,8 @@ requirement came only from the unofficial login library). The implementer may to
   - `src/garmin-client.ts` - thin wrapper over `fetch`: `getAccessToken(apiKey)` and typed getters
     returning normalized objects. Named for the outcome, so a future change of source touches one
     file (same discipline as `TranscriptionService`, [../../CLAUDE.md](../../CLAUDE.md)).
-  - `src/store.ts` - Firestore writes for `health_daily`, `activities`, and the `garminSync` doc.
+  - `src/training.ts` - pure per-day rollup of activities into `health_daily.training`.
+  - `src/store.ts` - Firestore writes for `health_daily`, `activities`, `system/hrZones` and `garminSync`.
   - `src/notify.ts` - Telegram send + the notify-once dedup logic.
   - `package.json` / `tsconfig.json` - pinned deps (`@google-cloud/firestore`; Node's built-in
     `fetch` for HTTP).
@@ -192,8 +193,9 @@ sweeper in [../architecture.md:715](../architecture.md#L715), is a workable alte
 
 ### Call frequency to Garmin
 
-**Once a day.** One scheduled run (default `0 7 * * *`, `Europe/Kyiv`) makes **5 requests**: one key
-exchange, then one ranged call each for sleep, HRV and daily summaries, plus one activities page.
+**Once a day.** One scheduled run (default `0 7 * * *`, `Europe/Kyiv`) makes **6 requests**: one key
+exchange, then one ranged call each for sleep, HRV and daily summaries, one activities page, and the
+heart-rate zones.
 Because the endpoints take date ranges, the cost does **not** grow with `BACKFILL_DAYS` (up to the
 31-day sleep cap; larger backfills are split into windows of at most 28 days, a few requests each).
 No numeric limit is published and Garmin may throttle without notice, so daily is the ceiling, not a
@@ -232,19 +234,41 @@ Secrets injected via `--set-secrets` (like the bot); plain settings via `--set-e
 - Data getters send `Authorization: Bearer <token>`. A `400`/`403` on a data call right after a
   successful exchange is unexpected and is treated as transient plus logged, not as an auth alert.
 - `dailyWellness(token, fromDate, toDate): Promise<Map<date, Wellness>>` - issues the three ranged
-  calls and merges them by `calendarDate` into
-  `{sleepSeconds, sleepScore, deepSleepSeconds, remSleepSeconds, hrvLastNightAvgMs, hrvWeeklyAvgMs,
-  hrvStatus, stressAvg, restingHr, steps, bodyBatteryCharged, bodyBatteryDrained}`. Absent fields
-  are `null`, never invented (mirrors the classifier's rule,
-  [../architecture.md:257](../architecture.md#L257)). Sources: `sleepTimeSeconds`,
-  `sleepScores.overall.value`, `deepSleepSeconds`, `remSleepSeconds`, `lastNightAvg`, `weeklyAvg`,
-  `status`, `stress.avgLevel`, `heartRate.restingValue`, `movement.steps.value`,
-  `bodyBattery.chargedValue`, `bodyBattery.drainedValue`.
+  calls and merges them by `calendarDate` into **grouped** fields (see "Daily document shape"). Absent
+  fields are `null`, never invented (mirrors the classifier's rule,
+  [../architecture.md:257](../architecture.md#L257)). Floats are rounded to one decimal so a document
+  reads cleanly; units are in the field name where Garmin's are not obvious (`needMinutes`,
+  `distanceM`).
 - `recentActivities(token, fromDate, toDate): Promise<Activity[]>` - pages the activities search
-  until an empty page. Normalized `{activityId, type, startTimeLocal, startTimeUtc, durationSec,
-  distanceKm, avgHr, maxHr}`. `type` is `activityType.typeKey`. `distanceKm` is `null` for
-  non-distance activities (strength, breathwork) rather than `0`, so it never masquerades as a real
-  value. `calories` is deliberately not stored (derived and noisy).
+  until a short page (so a normal run is one request). The list already carries time in each heart-rate
+  zone, training effect, training load, calories, respiration and body-battery change, so **no
+  per-activity detail request is made**. `distanceKm` is `null` for non-distance activities (strength,
+  breathwork), never `0`. Strength sessions store `sets` and `reps` totals only - no per-exercise
+  breakdown; every other type has them `null`.
+- `hrZones(token): Promise<HrZones[]>` - heart-rate zone boundaries (`zoneFloors` 1..5, max, resting
+  and lactate-threshold HR) per sport profile. One request per run; written to one small doc.
+- A truncated or non-JSON body is retried like a 5xx (seen once on a 28-day window).
+
+### Daily document shape (grouped, built to be read by a person or a model)
+
+```
+health_daily/{YYYY-MM-DD}: date, source, fetchedAt,
+  sleep{seconds, napSeconds, deepSeconds, lightSeconds, remSeconds, awakeSeconds, startLocal, endLocal,
+        awakeCount, avgHr, avgStress, avgSpo2, lowestSpo2, avgRespiration, lowestRespiration,
+        highestRespiration, score, scoreQualifier, deepPct, remPct, lightPct, needMinutes,
+        needBaselineMinutes, needFeedback, trainingFeedback},
+  hrv{lastNightAvg, weeklyAvg, last5MinHigh, status, baselineLowUpper, baselineBalancedLow, baselineBalancedUpper},
+  heart{resting, min, max}, stress{avg, max, qualifier, restShare, lowShare, mediumShare, highShare},
+  bodyBattery{charged, drained, min, max, latest}, respiration{avg, min, max}, spo2{avg, min, latest},
+  movement{steps, stepsGoal, distanceM, floorsUp, floorsDown}, calories{resting, active, total},
+  intensity{moderate, vigorous, goal},
+  training{count, durationSec, trainingLoad, strengthSessions, strengthSets, strengthReps,
+           aerobicEffectMax, anaerobicEffectMax}
+```
+
+`sleep.startLocal`/`endLocal` are wall-clock `YYYY-MM-DDTHH:mm:ss` (Garmin sends them as shifted epoch
+ms). `training` is **derived** from the same run's activities (`src/training.ts`, pure); a day with no
+activities gets zeros, not a missing field, because "did nothing" is a fact worth correlating.
 
 ### Firestore documents
 
@@ -263,7 +287,12 @@ it out.
   so re-pulling a day is an overwrite. Fields: `date`, `source: "garmin"`, the normalized wellness
   fields above, `fetchedAt: Timestamp`.
 - `users/{GARMIN_OWNER_USER_ID}/activities/{garminActivityId}` - one per activity. Doc id is Garmin's
-  own activity id. Fields: the normalized activity fields, `source: "garmin"`, `fetchedAt`.
+  own activity id. Fields: type, local/UTC start, durationSec, distanceKm, avgHr, maxHr, calories,
+  trainingEffectAerobic/Anaerobic/Label, trainingLoad, `hrZoneSeconds` (array of 5), steps,
+  avgRespiration, bodyBatteryDelta, intensityModerateMin/VigorousMin, sets, reps, `source: "garmin"`,
+  `fetchedAt`.
+- `users/{GARMIN_OWNER_USER_ID}/system/hrZones` - `{zones: HrZones[], fetchedAt}`, overwritten each run;
+  needed to read `hrZoneSeconds`.
 - `users/{GARMIN_OWNER_USER_ID}/system/garminSync` - one operational-state doc (non-secret):
   `{lastRunAt, lastSuccessAt, lastFetchedDate, lastError, alertState: "ok"|"alerted", alertedAt,
   expiryWarnedFor}`. `expiryWarnedFor` holds the `GARMIN_KEY_EXPIRES_ON` value already warned about,
@@ -319,12 +348,16 @@ empty because there is no automated verifier for this track.
 - **key-exchange:** the client exchanges the key and receives a JWT as plain text (not JSON); the
   token is not logged and no file containing it exists afterward.
 - **read-only-key:** the job's service account has **no** secret-write role; a normal run succeeds.
-- **health-fields-populated:** after a run, `users/{owner}/health_daily/{yesterday}` has non-null
-  `sleepSeconds`, `hrvLastNightAvgMs`, `stressAvg`, `steps`, `bodyBatteryCharged`,
-  `bodyBatteryDrained` and `restingHr`; and `health_daily/{today}` carries last night's sleep.
+- **health-fields-populated:** after a run, `health_daily/{yesterday}` has non-null `sleep.seconds`,
+  `sleep.score`, `hrv.lastNightAvg`, `heart.resting`, `stress.avg`, `movement.steps`,
+  `bodyBattery.charged`, `calories.total`, `spo2.avg` and `respiration.avg`; and `health_daily/{today}`
+  carries last night's sleep. `training` exists on every day.
 - **activities-stored:** recent activities appear under `users/{owner}/activities/{id}` with `type`,
-  `startTimeLocal` and `avgHr`; a strength activity has `distanceKm: null`.
-- **five-requests:** a normal run with `BACKFILL_DAYS=1` makes exactly 5 requests to Garmin (check
+  `startTimeLocal`, `avgHr`, `trainingLoad` and a 5-element `hrZoneSeconds`; a strength activity has
+  `distanceKm: null` and numeric `sets`/`reps`. `system/hrZones` holds five zone floors.
+- **rollup-correct:** a day with a run and a strength session has `training.count = 2` and
+  `training.strengthSessions = 1`; a rest day has `count = 0`.
+- **six-requests:** a normal run with `BACKFILL_DAYS=1` makes exactly 6 requests to Garmin (check
   the request-count log line).
 - **backfill-windowed:** `BACKFILL_DAYS=60` completes without a `400` (windows of at most 28 days)
   and fills 60 distinct `health_daily` docs.
@@ -381,9 +414,10 @@ case is one skipped morning, and the next run backfills it.
 - **Real-time / push from Garmin.** The personal tier is pull-only; this is a daily poll.
 - **FIT files, per-second streams, GPS, laps/splits, raw JSON blobs.** Only the curated daily and
   activity summary fields are stored. Available from the API but deliberately left out for now:
-  SpO2, respiration, floors, intensity minutes, calories, hydration, weight, nutrition, menstrual
-  cycle, fitness age, heart-rate zones, activity splits. Adding one is a getter change plus a
-  re-backfill.
+  hydration, weight, nutrition, menstrual cycle, fitness age, per-exercise strength breakdown, activity
+  splits and the per-activity detail endpoint (it adds almost nothing over the list). Adding one is a
+  getter change plus a re-backfill. Garmin has **no planned-workout endpoint** in the Personal API, so
+  "today's training plan" must come from the calendar spec (0014), not from here.
 - **The unofficial `garminconnect` route** and everything tied to it (password/MFA login, token
   rotation, `reauth.py`). Superseded by this rewrite; do not reintroduce it as a fallback.
 - **Automatic key renewal.** Garmin offers no API to mint a key; renewal is a manual console step by

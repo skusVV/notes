@@ -3,6 +3,7 @@ import { decide, Outcome } from './alert-state';
 import { GarminAuthError, GarminClient } from './garmin-client';
 import { render, sendTelegram } from './notify';
 import { Store } from './store';
+import { withTraining } from './training';
 
 function need(name: string): string {
   const v = process.env[name]?.trim();
@@ -41,9 +42,15 @@ async function main(): Promise<void> {
     const token = await client.getAccessToken(apiKey);
     const wellness = await client.dailyWellness(token, from, today);
     const activities = await client.recentActivities(token, from, today);
-    await store.writeWellness(wellness);
+    await store.writeWellness(withTraining(wellness, activities));
     await store.writeActivities(activities);
     counts = { days: wellness.size, activities: activities.length };
+    // Zone boundaries are a nice-to-have: a failure here must not turn a good sync into a bad one.
+    try {
+      await store.writeHrZones(await client.hrZones(token));
+    } catch (e) {
+      console.warn(`hr zones skipped: ${e instanceof Error ? e.message : 'unknown error'}`);
+    }
   } catch (e) {
     outcome = e instanceof GarminAuthError ? 'auth_rejected' : 'transient';
     lastError = e instanceof Error ? e.message : 'unknown error'; // messages carry status codes only

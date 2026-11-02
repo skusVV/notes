@@ -1,5 +1,5 @@
 import { Firestore, Timestamp } from '@google-cloud/firestore';
-import { Activity, Wellness } from './garmin-client';
+import { Activity, HrZones, Wellness } from './garmin-client';
 import { SyncState } from './alert-state';
 
 /** Firestore writes. Doc ids make every write an overwrite, so re-runs never duplicate. */
@@ -22,6 +22,11 @@ export class Store {
       this.col('activities').doc(String(a.activityId)),
       { ...a, source: 'garmin', fetchedAt: Timestamp.now() },
     ]));
+  }
+
+  /** One small doc, overwritten each run: zone boundaries rarely change but are needed to read hrZoneSeconds. */
+  async writeHrZones(zones: HrZones[]): Promise<void> {
+    await this.col('system').doc('hrZones').set({ zones, fetchedAt: Timestamp.now() });
   }
 
   async readState(): Promise<SyncState> {

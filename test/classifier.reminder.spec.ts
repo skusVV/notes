@@ -144,7 +144,7 @@ describe('ClassifierService reminder validation', () => {
     replyWithReminder(0.95, {
       title: "Bob's birthday",
       hasTimeOfDay: false,
-      recurrence: { freq: 'yearly', month: 6, day: 12 },
+      recurrence: { freq: 'yearly', month: 6, day: 12, evidence: 'birthday on June 12' },
     });
 
     const result = await classifier.classify('Bob has a birthday on June 12', context);
@@ -165,7 +165,7 @@ describe('ClassifierService reminder validation', () => {
     replyWithReminder(0.95, {
       title: 'take out the trash',
       hasTimeOfDay: true,
-      recurrence: { freq: 'weekly', weekday: 'monday', atLocal: '08:00' },
+      recurrence: { freq: 'weekly', weekday: 'monday', atLocal: '08:00', evidence: 'every Monday' },
     });
 
     const result = await classifier.classify('Take out the trash every Monday at 8am', context);

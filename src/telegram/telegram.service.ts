@@ -13,6 +13,7 @@ import {
   fallbackResult,
 } from '../classifier/classifier.types';
 import { ClockService } from '../clock/clock.service';
+import { DigestExport, DigestSettingsService } from '../digest/digest-settings.service';
 import { NotesService } from '../notes/notes.service';
 import { normalizeEventAt } from '../reminders/event-at';
 import { humanizeInstant } from '../reminders/humanize-time';
@@ -71,6 +72,7 @@ const HELP_TEXT = [
   'When a reminder is due I send it with Готово / +1 год / Завтра buttons.',
   '',
   '/export - show your stored reminders, notes and symptoms as JSON',
+  '/digest on, /digest off - увімкнути або вимкнути ранковий звіт',
   '/help - this message',
 ].join('\n');
 
@@ -148,6 +150,39 @@ export function reminderKeyboard(id: string): InlineKeyboardMarkup {
   };
 }
 
+const DIGEST_REPLY_ON = 'Ранковий звіт увімкнено.';
+const DIGEST_REPLY_OFF = 'Ранковий звіт вимкнено.';
+const DIGEST_REPLY_STATUS_ON = 'Ранковий звіт: увімкнено.';
+const DIGEST_REPLY_STATUS_OFF = 'Ранковий звіт: вимкнено.';
+const DIGEST_REPLY_INVALID = 'Не зрозумів. Команди: /digest on, /digest off';
+
+/** What a `/digest` command asks for. */
+export type DigestCommand = 'on' | 'off' | 'status' | 'invalid';
+
+/**
+ * Parses `/digest`, `/digest on`, `/digest off` (case-insensitive, `@botname` allowed). Anything
+ * else - a time like `08:30`, an unknown word, extra arguments - is `invalid`, and changes nothing.
+ */
+export function parseDigestCommand(text: string): DigestCommand {
+  const [command, ...args] = text.trim().split(/\s+/);
+  if (command.split('@')[0].toLowerCase() !== '/digest') {
+    return 'invalid';
+  }
+
+  if (args.length === 0) {
+    return 'status';
+  }
+
+  if (args.length === 1) {
+    const arg = args[0].toLowerCase();
+    if (arg === 'on' || arg === 'off') {
+      return arg;
+    }
+  }
+
+  return 'invalid';
+}
+
 function describeSender(from: TelegramUser | undefined): string {
   if (!from) {
     return 'user id unknown';
@@ -200,6 +235,7 @@ export class TelegramService {
     private readonly notes: NotesService,
     private readonly symptoms: SymptomsService,
     private readonly clock: ClockService,
+    private readonly digestSettings: DigestSettingsService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -635,12 +671,18 @@ export class TelegramService {
       return;
     }
 
+    if (command === '/digest') {
+      await this.handleDigestCommand(chatId, text, from, sender, sink);
+      return;
+    }
+
     await this.sendMessage(chatId, `I do not know ${command}. Try /help.`, sink);
   }
 
   /**
    * Dumps the requesting user's stored reminders, actors, notes and symptoms as one JSON object
-   * `{"reminders":[...],"actors":[...],"notes":[...],"symptoms":[...]}`. Read back by the verifier
+   * `{"reminders":[...],"actors":[...],"notes":[...],"symptoms":[...],"digest":{...}|null}` -
+   * `digest` is `{enabled, lastSentOn}`, or `null` when the user never set it. Read back by the verifier
    * over HTTP; assertions are made on this structure, never on reply wording. The output embeds the
    * user's own words, the names of real people and health information, so it is never logged - only
    * its item counts are.
@@ -687,10 +729,76 @@ export class TelegramService {
       }
     }
 
+    let digest: DigestExport = null;
+    if (from && this.digestSettings.available) {
+      try {
+        digest = await this.digestSettings.export(from.id);
+      } catch (error) {
+        this.logger.error(`Failed to export digest settings for ${sender}`, error as Error);
+      }
+    }
+
     this.logger.log(
       `Exported ${reminders.length} reminder(s), ${actors.length} actor(s), ${notes.length} note(s) and ${symptoms.length} symptom(s) for ${sender}`,
     );
-    await this.sendMessage(chatId, JSON.stringify({ reminders, actors, notes, symptoms }), sink);
+    await this.sendMessage(
+      chatId,
+      JSON.stringify({ reminders, actors, notes, symptoms, digest }),
+      sink,
+    );
+  }
+
+  /**
+   * `/digest on`, `/digest off`, `/digest` (status). Only switches the digest on and off: when it
+   * goes out is the morning job's Cloud Scheduler time, not a chat setting, so `/digest 08:30` is
+   * refused like any other argument. Every reply is a fixed string, never model output.
+   */
+  private async handleDigestCommand(
+    chatId: number,
+    text: string,
+    from: TelegramUser | undefined,
+    sender: string,
+    sink?: string[],
+  ): Promise<void> {
+    const action = parseDigestCommand(text);
+    if (action === 'invalid') {
+      await this.sendMessage(chatId, DIGEST_REPLY_INVALID, sink);
+      return;
+    }
+
+    if (!from || !this.digestSettings.available) {
+      await this.sendMessage(chatId, 'I cannot reach my store right now.', sink);
+      return;
+    }
+
+    try {
+      if (action === 'status') {
+        const settings = await this.digestSettings.get(from.id);
+        await this.sendMessage(
+          chatId,
+          settings?.enabled ? DIGEST_REPLY_STATUS_ON : DIGEST_REPLY_STATUS_OFF,
+          sink,
+        );
+        return;
+      }
+
+      const enabled = action === 'on';
+      await this.digestSettings.setEnabled(from.id, chatId, enabled);
+      await this.sendMessage(chatId, enabled ? DIGEST_REPLY_ON : DIGEST_REPLY_OFF, sink);
+    } catch (error) {
+      this.logger.error(`Failed to handle /digest for ${sender}`, error as Error);
+      await this.sendMessage(chatId, 'Sorry, I could not save that right now.', sink);
+    }
+  }
+
+  /**
+   * Sends one morning digest. Called by the digest runner only after it has claimed the day, so this
+   * never decides whether to send. Plain text through the chunking `sendMessage` - no `parse_mode`,
+   * because the digest lists reminder titles in the user's own words. Outside reflect mode a failed
+   * send throws, so the runner can report it.
+   */
+  async sendDigest(chatId: number, text: string, sink?: string[]): Promise<void> {
+    await this.sendMessage(chatId, text, sink);
   }
 
   private async handleVoice(

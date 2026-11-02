@@ -62,6 +62,7 @@ function makeService(reminders: ReturnType<typeof fakeReminders>, allowedUsers?:
     notes as never,
     symptoms as never,
     new ClockService(),
+    { available: false } as never,
   );
 }
 

@@ -486,6 +486,16 @@ the verifier reads the matching ingest secret from `TEST_INGEST_SECRET` in `.env
   no quiet hours. A notification is flipped `scheduled -> sent` inside a Firestore transaction
   *before* it is sent, so two overlapping ticks can never notify twice; a send that fails is logged
   and not retried. Each nudge of the same reminder is claimed and sent on its own.
+- **The morning digest comes from the morning job, not from the sweep.** `/digest on` opts in (off
+  by default; `/digest off` turns it off, bare `/digest` shows the status). The bot never schedules
+  the digest itself: it goes out when the separate morning job calls `POST /ingest/digest` with the
+  `X-Ingest-Secret` header and `{"userId": <id>}`, so **the time of the digest is that job's Cloud
+  Scheduler schedule** - change it in **Cloud Scheduler**, not in the chat (there is no
+  `/digest 08:30`). One digest per local day at most: the day is claimed before sending, a second
+  call the same day answers `sent: false, reason: "already_sent"`, and a day with nothing on it sends
+  nothing (`reason: "empty"`). v1 lists today's reminders by their event time; a reminder that also
+  fires as its own nudge arrives both ways, on purpose. No new secret or setting is needed:
+  `/ingest/digest` reuses `INGEST_SECRET` and `ALLOWED_USERS`.
 - **Each delivered notification carries OK / +1h / Tomorrow buttons.** `OK` marks **that
   notification** `acked`, `+1h` reschedules it to an hour after the tap, `Tomorrow` to 09:00 local
   the next day. A snooze moves only that notification's time - `eventAt`, when the thing itself

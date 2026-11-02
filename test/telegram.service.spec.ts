@@ -48,6 +48,7 @@ function makeService(): TelegramService {
     notes as never,
     symptoms as never,
     clock,
+    { available: false } as never,
   );
 }
 

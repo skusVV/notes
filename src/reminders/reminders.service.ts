@@ -76,6 +76,24 @@ export interface DueNotification {
   recurrence?: Recurrence;
 }
 
+/** One reminder whose event falls on a given local day, as the digest reads it. */
+export interface DayReminder {
+  id: string;
+  title: string;
+  /** The stored canonical local ISO; rendered by the caller, never shown raw. */
+  eventAt: string;
+  /** The instant the day query matched on. */
+  eventAtUtc: Date;
+  /** The reminder's own status; the caller decides which ones to show. */
+  status: string;
+  /**
+   * True only when the stored reminder says so (`allDay: true`). Nothing writes the flag yet - a
+   * birthday with no clock time is stored at the 09:00 default - so absent reads as false rather
+   * than being guessed from the time.
+   */
+  allDay: boolean;
+}
+
 /** A notification loaded for an owner check, before a callback acts on it. */
 export interface OwnedNotification {
   id: string;
@@ -225,6 +243,46 @@ export class RemindersService {
         );
       }),
     );
+  }
+
+  /**
+   * That user's reminders whose event instant falls in `[dayStart, dayEnd)`, unfiltered by status and
+   * unordered. One range query on the single field `eventAtUtc`, which Firestore's automatic
+   * single-field index serves - no composite index. Status is left to the caller to filter in memory,
+   * because combining it with the range would need one. A recurring reminder is found on the day its
+   * armed occurrence falls, since its `eventAt` tracks that occurrence. Empty when the store is
+   * unavailable.
+   */
+  async listForDay(userId: number, dayStart: Date, dayEnd: Date): Promise<DayReminder[]> {
+    const db = this.firestore.db;
+    if (!db) {
+      return [];
+    }
+
+    const snapshot = await db
+      .collection('users')
+      .doc(String(userId))
+      .collection('reminders')
+      .where('eventAtUtc', '>=', Timestamp.fromDate(dayStart))
+      .where('eventAtUtc', '<', Timestamp.fromDate(dayEnd))
+      .get();
+
+    return snapshot.docs.flatMap((doc) => {
+      const data = doc.data();
+      if (!(data.eventAtUtc instanceof Timestamp)) {
+        return [];
+      }
+      return [
+        {
+          id: doc.id,
+          title: typeof data.title === 'string' ? data.title : '',
+          eventAt: typeof data.eventAt === 'string' ? data.eventAt : '',
+          eventAtUtc: data.eventAtUtc.toDate(),
+          status: typeof data.status === 'string' ? data.status : '',
+          allDay: data.allDay === true,
+        },
+      ];
+    });
   }
 
   /**

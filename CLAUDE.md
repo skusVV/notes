@@ -168,6 +168,24 @@ reply that names a time calls the helper - it never interpolates `eventAt`, `atL
 test that pins `X-Test-Now` still pins the whole rendering. It never invents a time: a value it
 cannot parse is returned unchanged, the same discipline as `normalizeEventAt`.
 
+**The morning digest is pushed in from outside, and assembled from plug-in sections**
+([src/digest/](src/digest/)). The bot never schedules it: `POST /ingest/digest` (body `{userId}`,
+`IngestGuard` secret, then `400 invalid_user`, then `403 user_not_allowed` before anything is read or
+sent, then always `200`) is called by the morning job (spec 0022), so the digest time lives in that
+job's Cloud Scheduler schedule. `/sweep` knows nothing about it - do not add digest steps there.
+`DigestRunnerService.run` answers `sent` or a `reason` (`disabled`, `already_sent`, `empty`,
+`send_failed`); it **claims** the local day (`users/{id}.digest.lastSentOn`, transaction) *before*
+sending, so two calls can never send twice, a failed send is not retried, and an empty day claims
+nothing. The day is `localDay(now, DEFAULT_TIMEZONE)` - next local midnight, not `+24h`, because DST
+days are 23 or 25 hours. `DigestService` knows only the `DigestSection` interface: a section is one
+class plus one registration in its own module (it pushes itself into the `DIGEST_SECTIONS` array in
+`onModuleInit`, as `RemindersDigestSection` does), sorted by `order`, each built in its own
+try/catch so one failing section never drops the others, capped at 15 lines with `…і ще N`. Never
+log a section's lines or the digest text - user id, section id and line counts only. The runner is
+provided by `IngestModule`, not `DigestModule`, because it needs `TelegramService` and
+`TelegramModule` already imports `DigestModule` for `/digest on|off` and the `digest` key in
+`/export`.
+
 **Webhook response contract** ([src/telegram/telegram.controller.ts](src/telegram/telegram.controller.ts)):
 a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never processed (timing-safe
 compare); everything else gets `200` even when handling throws, so Telegram does not retry the same

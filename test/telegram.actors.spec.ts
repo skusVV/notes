@@ -71,6 +71,7 @@ function makeService(result: ClassificationResult, seed: Record<string, Record<s
     notes as never,
     symptoms as never,
     new ClockService(),
+    { available: false } as never,
   );
 
   return { service, store, actors, notes, symptoms, classify, reminders };
@@ -285,15 +286,21 @@ describe('TelegramService /export', () => {
   });
 
   // acceptance: export-actors-empty-shape / export-has-symptoms-key
-  // (now four keys - notes landed in 0007, symptoms in 0011)
-  it('returns all four keys, empty, for a user with nothing stored', async () => {
+  // (now five keys - notes landed in 0007, symptoms in 0011, digest in 0012)
+  it('returns all five keys, empty, for a user with nothing stored', async () => {
     const { service } = makeService(reminderResult([]));
     const replies: string[] = [];
 
     await service.handleUpdate(textUpdate('/export'), replies, NOW);
 
     expect(replies).toHaveLength(1);
-    expect(JSON.parse(replies[0])).toEqual({ reminders: [], actors: [], notes: [], symptoms: [] });
+    expect(JSON.parse(replies[0])).toEqual({
+      reminders: [],
+      actors: [],
+      notes: [],
+      symptoms: [],
+      digest: null,
+    });
   });
 
   it('lists a stored actor with its id, aliases, notes and ISO createdAt', async () => {

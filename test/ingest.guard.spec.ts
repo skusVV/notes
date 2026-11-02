@@ -26,7 +26,7 @@ const configOf = (env: Env) => ({ get: (key: string): string | undefined => env[
 function makeService(env: Env): TelegramService {
   const config = configOf({ TELEGRAM_BOT_TOKEN: 'fake:token', ...env });
   const off = { available: false } as never;
-  return new TelegramService(config as never, off, off, off, off, off, off, new ClockService());
+  return new TelegramService(config as never, off, off, off, off, off, off, new ClockService(), off);
 }
 
 function makeGuard(env: Env): IngestGuard {

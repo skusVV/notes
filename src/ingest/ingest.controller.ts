@@ -9,6 +9,8 @@ import {
   Post,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ClockService } from '../clock/clock.service';
+import { DigestRunnerService, DigestSkipReason } from '../digest/digest-runner.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { IngestGuard } from './ingest.guard';
 
@@ -50,6 +52,8 @@ export class IngestController {
     private readonly guard: IngestGuard,
     private readonly telegram: TelegramService,
     private readonly config: ConfigService,
+    private readonly digestRunner: DigestRunnerService,
+    private readonly clock: ClockService,
   ) {}
 
   /**
@@ -103,5 +107,57 @@ export class IngestController {
     }
 
     return sink ? { ok: true, replies: sink } : { ok: true };
+  }
+
+  /**
+   * The morning digest for one user, called by the morning job (spec 0022) - not by `/sweep` and not
+   * on the bot's own clock. Checks run in the same fixed order as `/ingest/message`: 401 for a wrong
+   * secret or unconfigured ingest, 400 invalid_user for a bad `userId`, 403 user_not_allowed for a
+   * user outside `ALLOWED_USERS` - and that 403 comes before anything is read or sent.
+   *
+   * After validation the answer is always 200: `sent` says whether a digest went out and `reason`
+   * why not (`disabled`, `already_sent`, `empty`, `send_failed`). A failure is logged by user id and
+   * still answers 200, with `sent: false` and no reason.
+   */
+  @Post('digest')
+  @HttpCode(200)
+  async digest(
+    @Headers('x-ingest-secret') secret: string | undefined,
+    @Headers('x-test-now') testNow: string | undefined,
+    @Body() body: unknown,
+  ): Promise<{ ok: boolean; sent: boolean; reason?: DigestSkipReason; replies?: string[] }> {
+    this.guard.assertIngestSecret(secret);
+
+    const fields = body as { userId?: unknown } | null | undefined;
+    const userId = parseIngestUserId(fields?.userId);
+    if (userId === undefined) {
+      throw new BadRequestException(INVALID_USER);
+    }
+
+    // The gate precedes every read of the user's settings and reminders, and every send.
+    if (!this.telegram.isAllowedUserId(userId)) {
+      this.logger.warn(`Rejected digest: user ${userId} is not in ALLOWED_USERS`);
+      throw new ForbiddenException(USER_NOT_ALLOWED);
+    }
+
+    // Same reflect/X-Test-Now trust boundary as /ingest/message and /sweep: test function only.
+    const reflect = this.config.get<string>('TEST_REFLECT_REPLY')?.trim() === 'true';
+    const sink: string[] | undefined = reflect ? [] : undefined;
+    const nowOverride = reflect ? testNow?.trim() || undefined : undefined;
+
+    let result: { sent: boolean; reason?: DigestSkipReason } = { sent: false };
+    try {
+      result = await this.digestRunner.run(userId, this.clock.now(nowOverride), sink);
+    } catch (error) {
+      // The user id only - never the digest, which lists the user's own notes.
+      this.logger.error(`Failed to run the digest for user ${userId}`, error as Error);
+    }
+
+    const response = {
+      ok: true,
+      sent: result.sent,
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
+    return sink ? { ...response, replies: sink } : response;
   }
 }

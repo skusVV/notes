@@ -1,6 +1,6 @@
 ---
 id: 0023-digest-gaps
-state: IN-TESTING
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0023-digest-gaps

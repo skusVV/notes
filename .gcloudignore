@@ -6,3 +6,5 @@ dist/
 .env.*
 .secrets
 README.md
+
+garmin-ingester/

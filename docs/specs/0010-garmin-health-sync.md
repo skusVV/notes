@@ -118,7 +118,7 @@ An **empty range returns `200` with `[]`** (verified: a 2024 range from before t
 - **HRV** - `{hrvSummaries:[{calendarDate, weeklyAvg, lastNightAvg, lastNight5MinHigh, status,
   baseline:{lowUpper, balancedLow, balancedUpper, markerValue}, ...}]}`. Status is a string such as
   a balanced / unbalanced label; store it verbatim.
-- **Daily summaries (v2)** - `{data:[{calendarDate, movement:{steps, floorsAscended, ...},
+- **Daily summaries (v2)** - `{data:[{calendarDate, movement:{steps:{value, goal, distanceInMeters}, floorsAscended, ...},
   heartRate:{minValue, maxValue, restingValue}, stress:{avgLevel, maxLevel, ...},
   bodyBattery:{minValue, maxValue, chargedValue, drainedValue, latestValue, ...}, calories,
   intensityMinutes, hydration, respiration, pulseOx, ...}]}`. **This one call replaces separate
@@ -238,7 +238,7 @@ Secrets injected via `--set-secrets` (like the bot); plain settings via `--set-e
   are `null`, never invented (mirrors the classifier's rule,
   [../architecture.md:257](../architecture.md#L257)). Sources: `sleepTimeSeconds`,
   `sleepScores.overall.value`, `deepSleepSeconds`, `remSleepSeconds`, `lastNightAvg`, `weeklyAvg`,
-  `status`, `stress.avgLevel`, `heartRate.restingValue`, `movement.steps`,
+  `status`, `stress.avgLevel`, `heartRate.restingValue`, `movement.steps.value`,
   `bodyBattery.chargedValue`, `bodyBattery.drainedValue`.
 - `recentActivities(token, fromDate, toDate): Promise<Activity[]>` - pages the activities search
   until an empty page. Normalized `{activityId, type, startTimeLocal, startTimeUtc, durationSec,

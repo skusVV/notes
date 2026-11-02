@@ -1,0 +1,32 @@
+# Separate Cloud Build trigger for the Garmin ingester (spec 0010). Path filter on the trigger:
+# garmin-ingester/** only, so the bot's own trigger and deploy are never affected.
+# Build config location for the trigger: garmin-ingester/cloudbuild.yaml
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/garmin-ingester:$SHORT_SHA', garmin-ingester]
+  - name: gcr.io/cloud-builders/docker
+    args: [push, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/garmin-ingester:$SHORT_SHA']
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_JOB_NAME}
+      - --region=${_REGION}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/garmin-ingester:$SHORT_SHA
+      - --max-retries=0
+      - --task-timeout=300s
+      # Read-only secrets; the job's service account has no secret-write role.
+      - --set-secrets=GARMIN_API_KEY=GARMIN_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest
+      # GARMIN_OWNER_USER_ID and GARMIN_KEY_EXPIRES_ON are set once in the Console (see README),
+      # and survive redeploys because this command does not touch them.
+      - --set-env-vars=GCP_PROJECT=$PROJECT_ID,FIRESTORE_DATABASE=${_FIRESTORE_DATABASE},BACKFILL_DAYS=1
+images: []
+substitutions:
+  _REGION: europe-west1
+  _REPO: cloud-run-source-deploy
+  _JOB_NAME: garmin-ingester
+  _FIRESTORE_DATABASE: (default)
+options:
+  logging: CLOUD_LOGGING_ONLY

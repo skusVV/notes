@@ -143,6 +143,33 @@ describe('RemindersDigestSection', () => {
     expect((await section.build(CTX))?.lines).toEqual(['Bob birthday', 'standup - о 10:00']);
   });
 
+  // 0023: all-day events first, then by time - even when an all-day one sorts later by its instant
+  it('puts all-day events first, then the rest by time', async () => {
+    const section = sectionOver({
+      [`${base}/early`]: reminder('2026-09-16T07:30:00+03:00', 'run'),
+      [`${base}/late`]: reminder('2026-09-16T18:00:00+03:00', 'dinner'),
+      [`${base}/bday`]: reminder('2026-09-16T09:00:00+03:00', 'Bob birthday', { allDay: true }),
+      [`${base}/anniv`]: reminder('2026-09-16T08:00:00+03:00', 'anniversary', { allDay: true }),
+    });
+
+    expect((await section.build(CTX))?.lines).toEqual([
+      'anniversary',
+      'Bob birthday',
+      'run - о 7:30',
+      'dinner - о 18:00',
+    ]);
+  });
+
+  it('shows the all-day line as exactly the title, with no 09:00 default', async () => {
+    const section = sectionOver({
+      [`${base}/bday`]: reminder('2026-09-16T09:00:00+03:00', 'Bob birthday', { allDay: true }),
+    });
+
+    const lines = (await section.build(CTX))?.lines ?? [];
+    expect(lines).toEqual(['Bob birthday']);
+    expect(lines.join('\n')).not.toMatch(/9:00/);
+  });
+
   it('never renders the raw ISO eventAt', async () => {
     const section = sectionOver({
       [`${base}/x`]: reminder('2026-09-16T14:00:00+03:00', 'pills'),

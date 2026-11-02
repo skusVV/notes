@@ -40,6 +40,11 @@ export interface ReminderDraft {
    * this being present is what makes a birthday ("on June 12", no clock time) storable.
    */
   recurrence?: Recurrence;
+  /**
+   * True only for a recurring reminder whose message named no clock time (a birthday). Set by
+   * code from `hasTimeOfDay === false`, never by the model; absent otherwise, never `false`.
+   */
+  allDay?: boolean;
 }
 
 export interface SymptomDraft {

@@ -588,6 +588,11 @@ export class ClassifierService {
         leadMinutes: optionalInt(reminder.leadMinutes),
         recurrence,
       };
+      // A recurring reminder with no stated clock time is all-day: the 09:00 default is a nudge
+      // time, not a time the user named. Only an explicit `false` counts - absent is not a "no".
+      if (recurrence && reminder.hasTimeOfDay === false) {
+        item.reminder.allDay = true;
+      }
     }
 
     const symptom = raw.symptom as Record<string, unknown> | undefined;

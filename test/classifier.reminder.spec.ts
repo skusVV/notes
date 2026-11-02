@@ -219,3 +219,77 @@ describe('ClassifierService reminder validation', () => {
     expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
   });
 });
+
+describe('ClassifierService allDay flag (0023)', () => {
+  let classifier: ClassifierService;
+
+  beforeEach(() => {
+    mockGenerateContent.mockReset();
+    classifier = makeClassifier();
+  });
+
+  // acceptance: birthday-shown-without-time - set by code from hasTimeOfDay === false
+  it('sets allDay for a valid recurrence with hasTimeOfDay === false', async () => {
+    replyWithReminder(0.95, {
+      title: "Bob's birthday",
+      hasTimeOfDay: false,
+      recurrence: { freq: 'yearly', month: 10, day: 14, evidence: 'birthday on October 14' },
+    });
+
+    const result = await classifier.classify('Bob has a birthday on October 14', context);
+
+    expect(result.items[0].reminder?.allDay).toBe(true);
+  });
+
+  // acceptance: timed-recurring-keeps-time - a named time means no allDay at all (absent, not false)
+  it('leaves allDay absent for a recurrence with a stated time', async () => {
+    replyWithReminder(0.95, {
+      title: 'stretch',
+      hasTimeOfDay: true,
+      recurrence: { freq: 'daily', atLocal: '15:00', evidence: 'every day' },
+    });
+
+    const result = await classifier.classify('Remind me every day at 15:00 to stretch', context);
+
+    expect(result.items[0].reminder?.recurrence).toBeDefined();
+    expect(result.items[0].reminder).not.toHaveProperty('allDay');
+  });
+
+  // Invent-nothing: an absent hasTimeOfDay is not a "no".
+  it('leaves allDay absent when hasTimeOfDay is missing', async () => {
+    replyWithReminder(0.95, {
+      title: "Bob's birthday",
+      recurrence: { freq: 'yearly', month: 10, day: 14, evidence: 'birthday on October 14' },
+    });
+
+    const result = await classifier.classify('Bob has a birthday on October 14', context);
+
+    expect(result.items[0].reminder?.recurrence).toBeDefined();
+    expect(result.items[0].reminder).not.toHaveProperty('allDay');
+  });
+
+  it('never sets allDay on a one-off, even with hasTimeOfDay === false', async () => {
+    replyWithReminder(0.95, {
+      title: 'call the doctor',
+      eventAt: '2026-09-17T09:00:00+03:00',
+      hasTimeOfDay: false,
+    });
+
+    const result = await classifier.classify('remind me on Thursday to call the doctor', context);
+
+    expect(result.items[0].reminder).not.toHaveProperty('allDay');
+  });
+
+  it('never sets allDay when the recurrence was rejected', async () => {
+    replyWithReminder(0.95, {
+      title: 'something weekly',
+      hasTimeOfDay: false,
+      recurrence: { freq: 'weekly' },
+    });
+
+    const result = await classifier.classify('remind me weekly', context);
+
+    expect(result.items[0].reminder?.recurrence).toBeUndefined();
+    expect(result.items[0].reminder).not.toHaveProperty('allDay');
+  });
+});

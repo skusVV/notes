@@ -23,6 +23,11 @@ export interface ReminderDraftInput {
    * `eventAt` is not needed and takes no part in the write.
    */
   recurrence?: Recurrence;
+  /**
+   * The classifier's "recurring, no clock time named" flag. Written only on the recurring path: a
+   * one-off with no time is never stored (it is asked about), so it can never carry the flag.
+   */
+  allDay?: boolean;
 }
 
 /** One nudge in the `/export` output. `at` is rendered in the same local-ISO form as `eventAt`. */
@@ -49,6 +54,8 @@ export interface ReminderExport {
   status: string;
   /** The repeat rule, or `null` for a one-off. */
   recurrence: Recurrence | null;
+  /** True only when the stored reminder carries `allDay: true`; absent reads as false. */
+  allDay: boolean;
   /** Every nudge this reminder owns, ascending. One entry for a reminder that named no extra time. */
   notifications: NotificationExport[];
 }
@@ -87,9 +94,9 @@ export interface DayReminder {
   /** The reminder's own status; the caller decides which ones to show. */
   status: string;
   /**
-   * True only when the stored reminder says so (`allDay: true`). Nothing writes the flag yet - a
-   * birthday with no clock time is stored at the 09:00 default - so absent reads as false rather
-   * than being guessed from the time.
+   * True only when the stored reminder says so (`allDay: true`), which `create` writes for a
+   * recurring reminder that named no clock time. Absent reads as false rather than being guessed
+   * from the time: a 09:00 the user named looks the same as the default.
    */
   allDay: boolean;
 }
@@ -176,6 +183,9 @@ export class RemindersService {
       ...(recurrence
         ? { recurrence }
         : { expireAt: Timestamp.fromDate(computeExpireAt(eventAt)) }),
+      // Present only as `true`, and only on the recurring path; the roll-forward rewrites just
+      // eventAt/eventAtUtc, so the flag carries over to every later occurrence by itself.
+      ...(recurrence && draft.allDay === true ? { allDay: true } : {}),
     };
 
     const ref = db.collection('users').doc(String(userId)).collection('reminders').doc();
@@ -538,12 +548,42 @@ export class RemindersService {
   }
 
   /**
-   * Marks one delivered notification done. No time changes, and nothing else moves: the reminder's
-   * other notifications still fire, and `eventAt` is never rewritten.
+   * Marks one delivered notification done. No time changes: the reminder's other notifications
+   * still fire, and `eventAt` is never rewritten.
+   *
+   * Then closes the reminder itself when nothing of it is still pending - no notification left
+   * `scheduled` or `sent` - so the digest stops listing it. A reminder with a second nudge still to
+   * come stays open, and so does a recurring one, whose next occurrence is already `scheduled`.
+   * A failure of that second step is logged, not thrown: the tap is already recorded on the
+   * notification, and the user must not see it fail.
    */
   async ackNotification(ref: DocumentReference, userId: number, now: Date): Promise<void> {
     await ref.update({ status: 'acked', ackedAt: Timestamp.fromDate(now) });
     this.logger.log(`Acked notification ${ref.id} for user ${userId}`);
+
+    const reminderRef = ref.parent.parent;
+    if (!reminderRef) {
+      return;
+    }
+    try {
+      // One field, so Firestore's automatic single-field index serves it - no composite index.
+      const pending = await reminderRef
+        .collection(NOTIFICATIONS)
+        .where('status', 'in', ['scheduled', 'sent'])
+        .limit(1)
+        .get();
+      if (!pending.empty) {
+        return;
+      }
+      await reminderRef.update({ status: 'acked', ackedAt: Timestamp.fromDate(now) });
+      this.logger.log(`Closed reminder ${reminderRef.id} for user ${userId}`);
+    } catch (error) {
+      // Ids only, never the reminder's text.
+      this.logger.error(
+        `Could not close reminder ${reminderRef.id} after acking notification ${ref.id} for user ${userId}`,
+        error as Error,
+      );
+    }
   }
 
   /**
@@ -587,6 +627,7 @@ export class RemindersService {
       expireAt: data.expireAt instanceof Timestamp ? data.expireAt.toDate().toISOString() : null,
       status: typeof data.status === 'string' ? data.status : '',
       recurrence: normalizeRecurrence(data.recurrence, recurrenceZone(data.recurrence)) ?? null,
+      allDay: data.allDay === true,
       notifications,
     };
   }

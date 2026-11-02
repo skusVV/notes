@@ -21,6 +21,7 @@ const SHOWN_STATUSES: ReadonlySet<string> = new Set(['scheduled', 'sent']);
  *
  * One line per reminder, not per notification - an appointment with an evening-before and a
  * morning-of nudge is one line - and the time shown is the event's (`eventAt`), not a nudge's.
+ * All-day events (a birthday) come first and show only their title.
  * The section deliberately duplicates the reminder's own delivery: the digest is the plan for the
  * day, the reminder is the signal at its time, and the user gets both.
  */
@@ -45,7 +46,11 @@ export class RemindersDigestSection implements DigestSection, OnModuleInit {
     const found = await this.reminders.listForDay(ctx.userId, ctx.dayStart, ctx.dayEnd);
     const today = found
       .filter((reminder) => SHOWN_STATUSES.has(reminder.status))
-      .sort((a, b) => a.eventAtUtc.getTime() - b.eventAtUtc.getTime());
+      // All-day events first (they have no time to order by), then the rest by time.
+      .sort(
+        (a, b) =>
+          Number(b.allDay) - Number(a.allDay) || a.eventAtUtc.getTime() - b.eventAtUtc.getTime(),
+      );
 
     if (today.length === 0) {
       return null;

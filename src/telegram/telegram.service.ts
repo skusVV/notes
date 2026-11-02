@@ -1137,6 +1137,7 @@ export class TelegramService {
           eventAt: reminder.eventAt,
           notifyAt: reminder.notifyAt,
           recurrence: reminder.recurrence,
+          allDay: reminder.allDay,
         },
         originalText,
         now,

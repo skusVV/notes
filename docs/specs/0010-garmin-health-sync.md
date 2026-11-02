@@ -1,6 +1,6 @@
 ---
 id: 0010-garmin-health-sync
-state: DRAFT
+state: READY
 attempt: 0
 max_attempts: 3
 branch: feat/0010-garmin-health-sync
@@ -13,6 +13,12 @@ failures: []
 
 > **0015 (Apple Health) видалено 2026-11-02:** власник визнав його неактуальним. Garmin - єдине
 > джерело здоров'я, конфлікту немає.
+
+> **Оновлення 2026-11-02 ([0022](0022-morning-run.md)):** розклад, ім'я джоби й директорія змінено.
+> Тепер це **одна ранкова джоба `morning-run`** (директорія `morning-run/`, Scheduler `0 7 * * *`): вона
+> тягне Garmin до 5 спроб, а потім просить бота надіслати ранковий звіт. Усі згадки `garmin-ingester`,
+> "once a day at 07:00 with no retries of the run" і Console-кроків 4-5 нижче читати з цією поправкою.
+> Контракти даних, алерти й інваріанти цього спека лишаються чинними.
 
 > **Delivery track: manual, NOT `/implement-spec`.** Every other spec here is verified over HTTP
 > against the isolated test Cloud Function ([README.md](README.md)). This one is a **separate

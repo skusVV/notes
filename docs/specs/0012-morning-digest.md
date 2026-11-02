@@ -7,103 +7,98 @@ branch: feat/0012-morning-digest
 acceptance:
   - id: health
     assert: "GET / returns HTTP 200 with body {\"status\":\"ok\"}"
-  - id: sweep-auth
-    assert: "POST /sweep with a missing or wrong X-Sweep-Secret returns HTTP 401 and sends no digest"
-  - id: cmd-on-default
-    assert: "POST the command '/digest on' from user id U70; the reflected reply is exactly 'Ранковий звіт увімкнено. Надсилатиму щодня о 07:00.' and a '/export' from U70 shows digest.enabled == true and digest.atLocal == '07:00'"
-  - id: cmd-set-time
-    assert: "POST '/digest 08:30' from user id U71; the reflected reply is exactly 'Ранковий звіт щодня о 08:30.'; a '/export' from U71 shows digest.enabled == true and digest.atLocal == '08:30'; then POST '/digest' from U71 and the reflected reply is exactly 'Ранковий звіт: увімкнено, щодня о 08:30.'"
-  - id: cmd-bad-time
-    assert: "POST '/digest 25:99' from user id U72; the reflected reply is exactly 'Не зрозумів час. Приклад: /digest 07:30' and a '/export' from U72 shows digest == null"
-  - id: cmd-off
-    assert: "POST '/digest on' then '/digest off' from user id U73; the reflected reply to the second is exactly 'Ранковий звіт вимкнено.' and a '/export' from U73 shows digest.enabled == false"
-  - id: export-has-digest-key
-    assert: "A '/export' from a user id with nothing stored (U79) returns a reflected reply that parses as JSON whose 'digest' property is null"
-  - id: digest-sent-early
-    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, POST '/digest 07:00' from user id U74 and POST 'Remind me today at 14:00 to take pills' from U74 (creates one scheduled reminder for 2026-09-16T14:00:00+03:00); read that reminder's stored title from '/export'. Then POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-09-16T06:45:00+03:00 (the 07:00 slot is inside the 30-minute look-ahead); the reflected replies contain exactly one string that starts with 'Доброго ранку' and contains the stored title and '14:00'; a '/export' from U74 shows digest.lastSentOn == '2026-09-16' and digest.nextDueAt == '2026-09-17T07:00:00+03:00'"
-  - id: not-before-window
-    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, POST '/digest 07:00' from user id U75; POST /sweep with X-Test-Now=2026-09-16T06:20:00+03:00 (06:20 + 30 min = 06:50, the 07:00 slot is still outside the window); a '/export' from U75 shows digest.lastSentOn == null and digest.nextDueAt == '2026-09-16T07:00:00+03:00'"
+  - id: digest-auth
+    assert: "POST /ingest/digest without X-Ingest-Secret or with a wrong one returns 401 with no replies; with a valid secret and no userId returns 400 with error == \"invalid_user\"; with a valid secret and userId 900000007 (not in the test allowlist) returns 403 with error == \"user_not_allowed\" and no replies"
+  - id: cmd-on-off-status
+    assert: "From U1: POST '/digest' and the reflected reply is exactly 'Ранковий звіт: вимкнено.'; POST '/digest on' and the reply is exactly 'Ранковий звіт увімкнено.' and a '/export' shows digest.enabled == true; POST '/digest' and the reply is exactly 'Ранковий звіт: увімкнено.'; POST '/digest off' and the reply is exactly 'Ранковий звіт вимкнено.' and a '/export' shows digest.enabled == false"
+  - id: cmd-bad-arg-and-export-key
+    assert: "From U2: a '/export' first returns JSON whose 'digest' property is null; POST '/digest 08:30' and the reflected reply is exactly 'Не зрозумів. Команди: /digest on, /digest off'; a '/export' still shows digest == null"
+  - id: disabled-sends-nothing
+    assert: "From U5 (digest never enabled): POST /ingest/digest (valid secret, userId 900000005) returns 200 with sent == false, reason == \"disabled\" and no reply starting with 'Доброго ранку'"
+  - id: empty-day-silent
+    assert: "Continuing U5: POST '/digest on' with no reminders for the day, then POST /ingest/digest with X-Test-Now=2026-09-16T07:00:00+03:00 returns sent == false, reason == \"empty\", and a '/export' from U5 shows digest.lastSentOn == null"
+  - id: digest-sent-with-reminder
+    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, from U3 POST '/digest on' and 'Remind me today at 14:00 to take pills'; read the stored title from '/export'. POST /ingest/digest (userId 900000003) with X-Test-Now=2026-09-16T07:00:00+03:00 returns sent == true and replies contains exactly one string that starts with 'Доброго ранку' and contains the stored title and '14:00'; a '/export' from U3 shows digest.lastSentOn == '2026-09-16'"
   - id: idempotent-no-double-send
-    assert: "After digest-sent-early, POST /sweep again with the same secret and X-Test-Now=2026-09-16T06:45:00+03:00; no reflected reply contains U74's stored reminder title, and U74's '/export' still shows digest.lastSentOn == '2026-09-16' and digest.nextDueAt == '2026-09-17T07:00:00+03:00' (the slot was advanced from the claimed slot, not from now, so the early tick did not re-arm today)"
+    assert: "After digest-sent-with-reminder, POST /ingest/digest for U3 again with the same X-Test-Now: sent == false, reason == \"already_sent\", no reply contains the stored title, and '/export' still shows digest.lastSentOn == '2026-09-16'; then with X-Test-Now=2026-09-17T07:00:00+03:00 after creating 'Remind me tomorrow at 14:00 to stretch' (with X-Test-Now=2026-09-16T06:00:00+03:00), the call returns sent == true"
   - id: only-today-listed
-    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, POST '/digest 07:00', 'Remind me today at 14:00 to call the bank' and 'Remind me tomorrow at 11:00 to renew the passport' from user id U76; read both stored titles from '/export' (told apart by eventAt). POST /sweep with X-Test-Now=2026-09-16T06:45:00+03:00; exactly one reflected reply starts with 'Доброго ранку', contains the 2026-09-16 reminder's stored title and does not contain the 2026-09-17 reminder's stored title"
+    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, from U4 POST '/digest on', 'Remind me today at 14:00 to call the bank' and 'Remind me tomorrow at 11:00 to renew the passport'; read both stored titles from '/export' (told apart by eventAt). POST /ingest/digest (userId 900000004) with X-Test-Now=2026-09-16T07:00:00+03:00: exactly one reply starts with 'Доброго ранку', contains the 2026-09-16 reminder's stored title and does not contain the 2026-09-17 reminder's stored title"
   - id: delivery-and-digest-both-arrive
-    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, POST '/digest 07:00' and 'Remind me today at 07:10 to stretch' from user id U77; read the stored title from '/export'. POST /sweep with X-Test-Now=2026-09-16T06:45:00+03:00 (both the 07:10 reminder and the 07:00 digest are inside the look-ahead); the reflected replies contain exactly one string that starts with 'Нагадування:' and contains the stored title (the delivery) AND exactly one string that starts with 'Доброго ранку' and contains the stored title (the digest); a '/export' from U77 shows that reminder's notification status == 'sent' and digest.lastSentOn == '2026-09-16'"
-  - id: stale-digest-skipped
-    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, POST '/digest 07:00' and 'Remind me today at 18:00 to buy milk' from user id U78. POST /sweep with X-Test-Now=2026-09-16T12:00:00+03:00 (five hours after the slot, past the 3-hour catch-up window); a '/export' from U78 shows digest.lastSentOn == null and digest.nextDueAt == '2026-09-17T07:00:00+03:00' (a morning report is not sent at noon)"
+    assert: "With X-Test-Now=2026-09-16T06:00:00+03:00, from U6 POST '/digest on' and 'Remind me today at 07:10 to stretch'; read the stored title from '/export'. POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-09-16T06:45:00+03:00: replies contain exactly one string that starts with 'Нагадування:' and contains the stored title and no string that starts with 'Доброго ранку'. Then POST /ingest/digest (userId 900000006) with X-Test-Now=2026-09-16T07:00:00+03:00: exactly one reply starts with 'Доброго ранку' and contains the stored title; a '/export' from U6 shows that reminder's notification status == 'sent' and digest.lastSentOn == '2026-09-16'"
 failures: []
 ---
 
 # 0012 - Ранковий звіт (digest)
 
-> **Критерії зафіксовано** (власник, `READY`). Рішення з розділу "Закриті питання" прийняті.
+> **Критерії зафіксовано** (власник, `READY`, 2026-11-02). Переписано з варіанта зі `/sweep`: звіт запускає
+> ранкова джоба ([0022](0022-morning-run.md)) викликом `POST /ingest/digest`. Рішення з розділу "Закриті
+> питання" прийняті.
 
 ## Context
 
 Зараз бот лише реагує: нагадування приходить тоді, коли настав його час, а повної картини дня немає.
 Цей спек додає **один ранковий лист на день**: короткий звіт про те, що на сьогодні. У v1 там лише
-розділ "Нагадування". Але звіт одразу будується як **збірка розділів**, щоб майбутній to-do, трекер
-симптомів чи дані Garmin
-([0010](0010-garmin-health-sync.md)) додавалися як ще один розділ без правок самого звіту.
+розділ "Нагадування". Але звіт одразу будується як **збірка розділів**, щоб Garmin
+([0018](0018-digest-garmin-sections.md)), календар ([0014](0014-calendar-sync.md)), to-do чи трекер
+симптомів додавалися як ще один розділ без правок самого звіту.
 
-Ідея вже є в [../architecture.md](../architecture.md), розділ 11 ("Morning digest"): "reuses the
-sweeper, turns the bot from reactive into present". Цей спек її реалізує.
+**Хто запускає.** Не бот за власним годинником, а виклик `POST /ingest/digest`, який робить ранкова
+джоба ([0022](0022-morning-run.md)) після того, як витягла дані Garmin (з ретраями) або вичерпала
+спроби. Час звіту задає Cloud Scheduler у Console, а не чат.
 
-**Залежить від 0002-0005 і 0009, змерджених у `main`**: звіт читає документи нагадувань і їхні
-сповіщення, і дописує до наявного `/sweep`.
+Ідея вже є в [../architecture.md](../architecture.md), розділ 11 ("Morning digest"): "turns the bot from
+reactive into present". Цей спек її реалізує.
+
+**Залежить від 0002-0005, змерджених у `main`**: звіт читає документи нагадувань. (0009 не потрібен: розділ читає лише `eventAt` і статус, а не вид нагадування.) Ендпоінт
+користується `IngestGuard` з [0013](0013-iphone-quick-capture.md) і `userId` у тілі з
+[0017](0017-ingest-user-id.md).
 
 ## Рішення, прийняті в цьому спеку
 
-1. **Без нового cron.** Звіт їде на тому самому тику Cloud Scheduler (`*/30`, `POST /sweep`), що й
-   доставка нагадувань. Жодного нового секрету, Scheduler-джоба чи ендпоінта. Тик, що пропав,
-   наздоганяється наступним (у межах вікна наздоганяння) (як і в [0003](0003-reminder-delivery.md)).
-2. **Раніше, не пізніше - те саме правило, що й у нагадувань.** Тик бере звіт, чий слот потрапляє
-   у вікно `now + REMINDER_SWEEP_INTERVAL_MINUTES` ([0003](0003-reminder-delivery.md)). Звіт на 07:00
-   приходить на тику 06:30-06:59, до 30 хвилин раніше, і ніколи не пізніше за слот (крім наздоганяння
-   після простою, див. нижче). Гранулярність 30 хвилин, і `/digest 07:10` прийде на тику, що
-   передує 07:10 (README каже про це).
-3. **"Коли наступний" живе в документі користувача.** `users/{id}.digest.nextDueAt` - UTC-момент
-   наступного звіту. Тик питає Firestore лише про тих, у кого `nextDueAt <= cutoff`, тож вартість тика не
-   росте з кількістю тих, кому звіт вже надіслано. Та сама ідея, що `status == 'scheduled'` для
-   нагадувань.
-4. **Claim, потім send** - як у нагадувань. У транзакції на документі користувача: якщо
-   `nextDueAt <= cutoff`, пересунути `nextDueAt` на наступний слот **після заявленого слота** (не після
-   `now`: тик іде раніше слота, і відлік від `now` перезапустив би сьогоднішній) і лише переможець транзакції збирає
-   і шле звіт. Два накладні тики не можуть надіслати двічі.
-5. **Звіт і нагадування - два окремі повідомлення, обидва приходять.** Нагадування, що стріляє на
-   тому самому тику, звіт не заміщає і не прибирає зі списку: звіт - план дня, нагадування - сигнал.
-   Тому звіт не залежить від порядку доставки і від статусу `sent`.
-6. **Розділи - це плагіни.** Звіт знає лише інтерфейс `DigestSection`; кожен розділ реєструється у
+1. **Без нового cron у боті.** Бот сам звіт не планує. `/sweep` цим спеком **не змінюється** (жодних
+   кроків звіту в ньому). Звіт їде, коли хтось з секретом викличе `POST /ingest/digest`.
+2. **Раз на добу, захист від дубля.** `users/{id}.digest.lastSentOn` - локальна дата останнього звіту.
+   Другий виклик того ж дня відповідає `sent:false, reason:"already_sent"` і нічого не шле. Запис
+   робиться транзакцією (claim) **до** відправки: два накладні виклики не можуть надіслати двічі.
+3. **Звіт і нагадування - два окремі повідомлення, обидва приходять.** Нагадування, що стріляє на тому
+   ж тику `/sweep`, звіт не заміщає: звіт - план дня, нагадування - сигнал. Звіт не залежить від
+   статусу `sent`.
+4. **Розділи - це плагіни.** Звіт знає лише інтерфейс `DigestSection`; кожен розділ реєструється у
    власному модулі. Розділ, що впав, не валить звіт (див. Contracts).
-7. **Опт-ін, не за замовчуванням.** Звіт увімкнено командою `/digest on`. Бот не починає писати
-   першим без прохання.
+5. **Опт-ін, не за замовчуванням.** Звіт увімкнено командою `/digest on`. Бот не пише першим без
+   прохання, навіть коли джоба його викликає.
+6. **Час звіту не живе в боті.** Команди `/digest 08:30` немає. Час - це розклад Cloud Scheduler
+   ([0022](0022-morning-run.md)). Команда лише вмикає й вимикає.
+7. **Порожній день - мовчання.** Усі розділи порожні: нічого не слати, не займати добу.
 
 ## Scope
 
 - `src/digest/digest.types.ts` - **новий.** `DigestSection`, `DigestContext`, токен `DIGEST_SECTIONS`.
 - `src/digest/digest.service.ts` - **новий.** Збірка звіту: опитати розділи, склеїти, не впасти.
-- `src/digest/digest-schedule.ts` - **новий.** Чиста функція `nextDueAfter(now, atLocal, timezone)` та
-  `isStale(now, dueAt, catchupHours)`. Без Nest, без годинника - приймає `now` аргументом.
-- `src/digest/digest.module.ts` - **новий.**
+- `src/digest/local-day.ts` - **новий.** Чиста функція `localDay(now, timezone)` ->
+  `{ dateKey: 'YYYY-MM-DD', dayStart, dayEnd }`. Без Nest, без годинника - приймає `now` аргументом.
 - `src/digest/digest-settings.service.ts` - **новий.** Читання/запис `users/{id}.digest`, транзакція
-  claim, `listDue(now)`.
+  claim `claimToday(userId, dateKey)`.
+- `src/digest/digest-runner.service.ts` - **новий.** `run(userId, now, sink)`: вся логіка
+  `/ingest/digest` (див. Contracts).
+- `src/digest/digest.module.ts` - **новий.**
 - `src/reminders/reminders-digest.section.ts` - **новий.** Розділ "Нагадування" (єдиний у v1).
 - `src/reminders/reminders.module.ts` - зареєструвати розділ у `DIGEST_SECTIONS`.
 - `src/reminders/reminders.service.ts` - `listForDay(userId, dayStart, dayEnd)`: нагадування, чий
   `eventAt` потрапляє в локальну добу.
-- `src/telegram/sweeper.service.ts` - після доставки нагадувань викликати `runDigests(now, sink)`.
-- `src/telegram/telegram.service.ts` - команда `/digest`, рядок у `HELP_TEXT`, `digest` у `/export`,
-  метод `sendDigest(chatId, text, sink)`.
+- `src/ingest/ingest.controller.ts` - `POST /ingest/digest`.
+- `src/telegram/telegram.service.ts` - команда `/digest` (`on`/`off`/статус), рядок у `HELP_TEXT`,
+  `digest` у `/export`, метод `sendDigest(chatId, text, sink)`.
 - `src/reminders/humanize-time.ts` - лише якщо бракує допоміжної функції (дата у вигляді
   "16 вересня"); наявні функції не змінювати.
-- `.env.example`, `cloudbuild.yaml` - `DIGEST_CATCHUP_HOURS` в `--set-env-vars` (за замовч. 3).
-- `README.md` - один абзац: гранулярність 30 хвилин і що звіт їде на існуючому `/sweep`.
-- `test/` - `digest-schedule.spec.ts`, `digest.service.spec.ts`,
-  `reminders-digest.section.spec.ts`; оновити `sweeper.service.spec.ts`.
+- `README.md` - один абзац: звіт їде з ранкової джоби, час - у Scheduler.
+- `test/` - `local-day.spec.ts`, `digest.service.spec.ts`, `reminders-digest.section.spec.ts`,
+  `digest-runner.service.spec.ts`.
 - `CLAUDE.md` - абзац в **Architecture**.
 
-Поза межами без повернення в `DRAFT`: класифікатор, транскрипція, контракт вебхука, `docs/architecture.md`
-(це ручний планувальний документ), будь-яка нова Firestore-композитна індексація.
+Поза межами без повернення в `DRAFT`: `/sweep` і `SweeperService`, класифікатор, транскрипція, контракт
+вебхука, `docs/architecture.md` (ручний планувальний документ), будь-яка нова Firestore-композитна
+індексація, ранкова джоба (це [0022](0022-morning-run.md)).
 
 ## Contracts
 
@@ -112,22 +107,43 @@ sweeper, turns the bot from reactive into present". Цей спек її реа�
 ```ts
 interface DigestSettings {
   enabled: boolean;
-  /** Локальний час звіту, 'HH:mm', 24 год. */
-  atLocal: string;
-  /** IANA-зона. v1: завжди DEFAULT_TIMEZONE, але поле є, бо зона буде на користувача. */
-  timezone: string;
   /** Куди слати. У приватному чаті дорівнює userId; береться з чату, де дали команду. */
   chatId: number;
-  /** UTC-момент найближчого звіту. Тик бере тих, у кого він <= now. */
-  nextDueAt: Timestamp;
-  /** 'YYYY-MM-DD' (локальна доба) останнього *реально надісланого* звіту; null, якщо ще не було. */
+  /** 'YYYY-MM-DD' (локальна доба) останнього звіту, для якого зроблено claim; null, якщо ще не було. */
   lastSentOn: string | null;
 }
 ```
 
-`/export` отримує ключ `digest`: `null`, якщо налаштувань немає, інакше об'єкт, де `atLocal`,
-`enabled`, `lastSentOn` - як у документі, а `nextDueAt` показано локальним ISO з офсетом
-(`2026-09-17T07:00:00+03:00`), так само як `eventAt`.
+Зона - `DEFAULT_TIMEZONE` (на користувача зони поки немає, див. Out of scope).
+
+`/export` отримує ключ `digest`: `null`, якщо налаштувань немає, інакше `{enabled, lastSentOn}`.
+
+### `POST /ingest/digest`
+
+Заголовки й перевірки як в `/ingest/message` ([0013](0013-iphone-quick-capture.md),
+[0017](0017-ingest-user-id.md)), у фіксованому порядку:
+
+1. `X-Ingest-Secret` невірний або ingest не налаштовано - `401`.
+2. Тіло `{ "userId": 900000001 }`. `userId` відсутній чи не додатне ціле (число або рядок цифр) - `400
+   {"ok":false,"error":"invalid_user"}`.
+3. `userId` не в `ALLOWED_USERS` - `403 {"ok":false,"error":"user_not_allowed"}`. Нічого не шлеться і не
+   читається далі.
+4. Далі завжди `200` (збій після валідації - у лог). Тіло: `{ "ok": true, "sent": boolean,
+   "reason"?: string, "replies"?: string[] }`. `replies` - лише на тестовій функції
+   (`TEST_REFLECT_REPLY=true`), яка ще й шанує `X-Test-Now`; та сама довірча межа, що й у `/ingest/message`.
+
+Логіка `DigestRunnerService.run(userId, now, sink)`:
+
+1. `digest` відсутній або `enabled != true` - `sent:false, reason:"disabled"`.
+2. `localDay(now, tz)`. `lastSentOn == dateKey` - `sent:false, reason:"already_sent"`.
+3. Побудувати звіт (`DigestService.build`). `undefined` (усе порожньо) - `sent:false, reason:"empty"`;
+   claim **не** робиться (порожній день не займає добу).
+4. **Claim:** транзакція - перечитати; якщо `lastSentOn == dateKey`, програли - `already_sent`; інакше
+   записати `lastSentOn = dateKey`.
+5. Надіслати. Збій (бот заблокований, 403, мережа): залогувати id і код, **не повторювати**, відповісти
+   `sent:false, reason:"send_failed"`. Claim уже зроблено, тож повтор того ж дня нічого не надішле
+   (так само, як у [0003](0003-reminder-delivery.md): не повторювати).
+6. Успіх - `sent:true`.
 
 ### Інтерфейс розділу (`src/digest/digest.types.ts`)
 
@@ -161,11 +177,11 @@ export interface DigestSectionResult {
 export const DIGEST_SECTIONS = Symbol('DIGEST_SECTIONS');  // multi-provider токен Nest
 ```
 
-Додати розділ у майбутньому = один клас, що реалізує `DigestSection`, і один рядок
-`{ provide: DIGEST_SECTIONS, useClass: ..., multi... }` у його власному модулі. `DigestService`,
-`SweeperService` і `/digest` не змінюються. (Nest не має справжнього multi-provider; реалізація
-використовує масив-провайдер із `useFactory` і `inject: [...]` або реєстр, куди розділи
-реєструються в `onModuleInit`. Вибір - за імплементатором, але зовнішня форма така, як вище.)
+Додати розділ у майбутньому = один клас, що реалізує `DigestSection`, і один рядок реєстрації у його
+власному модулі. `DigestService`, `DigestRunnerService` і `/digest` не змінюються. (Nest не має
+справжнього multi-provider; реалізація використовує масив-провайдер із `useFactory` і `inject: [...]`
+або реєстр, куди розділи реєструються в `onModuleInit`. Вибір - за імплементатором, зовнішня форма
+така, як вище.)
 
 ### `DigestService.build(ctx)`
 
@@ -198,44 +214,15 @@ export const DIGEST_SECTIONS = Symbol('DIGEST_SECTIONS');  // multi-provider т�
 доставлене сьогодні, але ще не відмічене "Готово", у звіті є: звіт - це план дня, а не черга
 недоставленого. Один рядок на нагадування, не на сповіщення: прийом лікаря о 14:00 з двома
 сповіщеннями ("ввечері перед" і "вранці в день") - це один рядок. Час у рядку - це `eventAt` (коли
-*подія*), а не `at` сповіщення. Сортування за часом зростанням.
+*подія*), а не `at` сповіщення. Сортування за часом зростанням. Подія на весь день (день народження
+без часу) показується без "о HH:mm".
 
 Читання: один запит до `users/{id}/reminders` за `eventAtUtc >= dayStart && < dayEnd`
 (одне поле, автоіндекс; **без** нового композитного індексу), статус фільтрується в пам'яті.
 Повторювані нагадування працюють без змін: їхній `eventAt` завжди вказує на озброєну оказію.
 
-Дублювання між доставкою і звітом - **бажане**: користувач отримує і звіт зранку, і саме нагадування
-у свій час.
-
-### Порядок у `SweeperService.sweep`
-
-1. Доставка нагадувань (як зараз).
-2. `runDigests(now, sink)`.
-
-Порядок не впливає на вміст звіту (звіт не залежить від статусу `sent`), але кроки **незалежні**: збій
-одного (кожен у власному `try/catch`) не блокує другий, і `/sweep` завжди відповідає `200`.
-
-### `runDigests(now, sink)`
-
-1. `cutoff = now + REMINDER_SWEEP_INTERVAL_MINUTES` (той самий look-ahead, що й у нагадувань).
-   `listDue(cutoff)`: користувачі з `digest.enabled == true && digest.nextDueAt <= cutoff`.
-2. Для кожного, послідовно, у власному `try/catch`:
-   1. **Бар'єр доступу:** `userId` має бути в `ALLOWED_USERS` (та сама перевірка, що й для апдейтів).
-      Ні - пересунути `nextDueAt`, нічого не слати, залогувати. Бот ніколи не пише першим тому, кого
-      вже вилучено зі списку, навіть якщо документ лишився в Firestore.
-   2. **Claim:** транзакція - перечитати `nextDueAt`; якщо ще `<= cutoff`, записати
-      `nextDueAt = nextDueAfter(старий nextDueAt, atLocal, timezone)` - найближчий слот строго
-      **після заявленого**, не після `now`. Не переможець - `continue`.
-   3. **Застарілість:** якщо `now > заявлений слот + DIGEST_CATCHUP_HOURS` (після простою), звіт
-      **пропускається** (слот уже пересунуто). Ранковий звіт о 15:00 - абсурд. Ранні тики
-      (`now` до слота) застарілими не бувають.
-   4. Побудувати звіт. `undefined` (усі розділи порожні) - нічого не слати.
-   5. Надіслати; після успіху записати `lastSentOn = <локальна дата>`.
-3. Невдала відправка (бот заблокований, 403, мережа): залогувати id і код, **не повторювати**
-   (як у 0003). Слот уже пересунуто, завтра буде наступний.
-
-`nextDueAfter(after, atLocal, tz)` повертає **найближчий слот строго після `after`** у локальному часі
-зони, тож DST-зміна не зсуває "07:00" (береться зі стіни, не з додавання 24 годин).
+Дублювання між звітом і самим нагадуванням - **бажане**: користувач отримує і звіт зранку, і саме
+нагадування у свій час.
 
 ### Команда `/digest`
 
@@ -244,108 +231,117 @@ export const DIGEST_SECTIONS = Symbol('DIGEST_SECTIONS');  // multi-provider т�
 
 | Ввід | Відповідь |
 |---|---|
-| `/digest on` | `Ранковий звіт увімкнено. Надсилатиму щодня о 07:00.` (07:00 - якщо час ще не заданий; інакше збережений) |
-| `/digest HH:mm` (напр. `/digest 08:30`) | `Ранковий звіт щодня о 08:30.` (і вмикає звіт) |
-| `/digest off` | `Ранковий звіт вимкнено.` (час зберігається) |
-| `/digest` | `Ранковий звіт: увімкнено, щодня о 08:30.` або `Ранковий звіт: вимкнено.` |
-| `/digest <нерозбірливе>` | `Не зрозумів час. Приклад: /digest 07:30` (нічого не змінюється) |
+| `/digest on` | `Ранковий звіт увімкнено.` (пише `enabled=true`, `chatId` чату, де дали команду; `lastSentOn` не чіпає) |
+| `/digest off` | `Ранковий звіт вимкнено.` |
+| `/digest` | `Ранковий звіт: увімкнено.` або `Ранковий звіт: вимкнено.` (немає налаштувань - `вимкнено`) |
+| `/digest <щось інше>` | `Не зрозумів. Команди: /digest on, /digest off` (нічого не змінюється) |
 
-`HH:mm` приймає `7:30` і `07:30`; відхиляє `25:99`. Увімкнення рахує `nextDueAt` = найближчий слот
-**строго після** моменту команди: `/digest 07:00`, надане о 07:10, перший звіт дає завтра, а не
-негайно (тихе "а чому прийшов сам, без запиту" гірше за добу очікування). Надане о 06:50 - перший
-звіт сьогодні о 07:00 (на тику, що його покриває).
-
-Команда проходить `ALLOWED_USERS` так само, як і решта, і пише `chatId` чату, де її дали.
+Команда проходить `ALLOWED_USERS` так само, як і решта.
 
 ## Invariants (must not break)
 
-- Вебхук і `/sweep` відповідають `200` у всіх випадках, крім хибного секрету (`401`). Збій розділу,
-  Firestore чи Telegram - у лог, не `5xx`: Cloud Scheduler повторює `5xx`, а це видало б дубль-звіт.
-- Бар'єр `ALLOWED_USERS` стоїть **перед** будь-якою відправкою звіту, а не лише перед апдейтами.
-- Подвійна відправка неможлива: `nextDueAt` пересувається в транзакції до відправки.
+- Вебхук, `/sweep` і `/ingest/digest` після валідації відповідають `200`; збій розділу, Firestore чи
+  Telegram - у лог. Виняток `/ingest/digest`: `401`, `400`, `403` як у розділі вище.
+- Бар'єр `ALLOWED_USERS` стоїть **перед** будь-яким читанням чи відправкою звіту.
+- Подвійна відправка неможлива: claim `lastSentOn` у транзакції до відправки.
 - Відповіді й звіт без `parse_mode`: заголовки нагадувань - слова користувача, Markdown зламався б на
   підкресленні.
 - Жоден сирий ISO-час не потрапляє в чат. Час - лише через `humanize-time.ts`.
 - Health-data дисципліна: ніколи не логувати `title`, текст звіту чи вміст розділів. Лише `userId`,
   `id` розділу, кількість рядків, коди помилок.
-- Розділ, що впав, ніколи не блокує інші розділи й не 500-ить `/sweep`.
-- Жодного нового секрету, ендпоінта чи Scheduler-джоба; жодного `gcloud`. Усе GCP-налаштування (якщо
-  буде) - Console-інструкціями в README.
+- Розділ, що впав, ніколи не блокує інші розділи й не 500-ить ендпоінт.
+- `/sweep` і `SweeperService` цим спеком не змінюються.
+- Жодного нового секрету, Scheduler-джоба чи `gcloud`: `INGEST_SECRET` уже існує. Усе GCP-налаштування
+  (якщо буде) - Console-інструкціями в README.
 
-## Підводні камені (враховані вище, і ті, що ні)
+## Підводні камені
 
-**Враховані в Contracts:**
-
-- **Звіт і нагадування - окремі повідомлення.** Нагадування на 07:15 стріляє на тику 07:00 і лежить
-  у звіті того ж тику: обидва приходять, це вимога, не баг. Звіт тому не фільтрує за `sent`.
-- **Слот рахується від заявленого слота, не від `now`.** Звіт іде раніше слота; відлік "завтра" від
-  `now` дав би сьогоднішній слот знову, і звіт прийшов би двічі (та сама пастка, що з
-  `enqueueNextOccurrence` у повторюваних нагадувань).
+- **Звіт і нагадування - окремі повідомлення.** Нагадування на 07:15 стріляє на тику `/sweep` і лежить
+  у звіті: обидва приходять, це вимога, не баг. Звіт тому не фільтрує за `sent`.
 - **Доба і DST.** Доба = `[00:00, 00:00)` локального часу зони; у дні переходу вона 23 або 25 годин.
   Межі беруться через `startOf('day')` і `plus({days: 1})` luxon, не додаванням `24h`.
-- **Простій.** Без вікна наздоганяння після простою о 15:00 прийшов би "ранковий" звіт.
-  `DIGEST_CATCHUP_HOURS`.
 - **Лист, що не влазить.** Ліміт на розділ + чанкування `sendMessage`.
-- **Порожній день.** Див. відкрите питання 2.
-- **Користувач заблокував бота / вилучений із `ALLOWED_USERS`.** Не 5xx, без повторів, без листа.
+- **Порожній день.** Мовчання, claim не робиться.
+- **Користувач заблокував бота / вилучений із `ALLOWED_USERS`.** `403`/без відправки, без повторів.
 - **Збій одного розділу.** Ізольований; решта йде.
-- **Вартість тика.** Один запит до `users` за `digest.nextDueAt <= now`; після того як звіт
-  надіслано, користувач у вибірку не потрапляє до завтра.
+- **Джоба не викликала ендпоінт.** Звіту того дня немає; ніхто його не наздоганяє (свідомо: ранковий
+  звіт у обід безглуздий). Це відповідальність [0022](0022-morning-run.md), яка викликає ендпоінт у
+  `finally`.
 
-**Свідомо не вирішені (див. Out of scope):**
+**Свідомо не вирішені:**
 
 - Сповіщення, яке спрацює **сьогодні**, але для події **іншого дня** ("нагадаю о 19:00 про завтрашній
-  візит"), у звіт v1 **не** входить: розділ дивиться на `eventAt`, не на `at`.
+  візит"), у звіт **не** входить: розділ дивиться на `eventAt`, не на `at`.
 - Часова зона на користувача: v1 бере `DEFAULT_TIMEZONE`.
-- Гранулярність 30 хвилин: точніший час потребує частішого cron.
 
 ## Acceptance criteria (locked at READY)
 
-Дзеркало frontmatter. Верифікатор шле запити на тестову функцію з `X-Test-Now`, автентифікує `/sweep`
-через `TEST_SWEEP_SECRET` і стверджує про **збережену структуру** (`/export`) та точні детерміновані
-рядки команд, не про формулювання моделі. Кожен критерій має свій `from.id` (U70-U79), щоб стан не
-перетікав між перевірками. Заголовок нагадування читається з `/export`, а не вгадується, бо його
-виводить модель.
+Дзеркало frontmatter. Верифікатор шле запити на тестову функцію з
+`X-Test-Now`, автентифікує `/ingest/digest` через `X-Ingest-Secret`, `/sweep` через `TEST_SWEEP_SECRET`,
+і стверджує про **збережену структуру** (`/export`), `replies` та точні детерміновані рядки команд, не
+про формулювання моделі. Користувачі - шість тестових id з [0016](0016-split-allowed-users.md)
+(U1-U6 = `900000001`-`900000006`), станом не діляться між перевірками. Заголовок нагадування
+читається з `/export`, а не вгадується, бо його виводить модель.
 
-- **health / sweep-auth** - функція жива, ендпоінт закритий без секрету.
-- **cmd-on-default / cmd-set-time / cmd-bad-time / cmd-off** - точні відповіді команди і збережений
-  стан.
-- **export-has-digest-key** - `/export` має ключ `digest` (`null`, коли нічого немає).
-- **digest-sent-early** - звіт приходить на тику, що передує слоту (look-ahead); містить заголовок і
-  час нагадування; `lastSentOn` і `nextDueAt` оновлено.
-- **not-before-window** - тик, чиє вікно слота ще не охоплює, звіту не шле.
-- **idempotent-no-double-send** - повторний `/sweep` не шле вдруге, а слот пересунуто від заявленого.
-- **only-today-listed** - завтрашнє нагадування в сьогоднішній звіт не потрапляє.
-- **delivery-and-digest-both-arrive** - на одному тику приходять і нагадування, і звіт, і нагадування
-  є в обох.
-- **stale-digest-skipped** - після простою понад вікно наздоганяння звіт пропущено.
+- **health** - `GET /` дає `200 {"status":"ok"}`.
+- **digest-auth** - `POST /ingest/digest` без секрету чи з хибним - `401`, без `replies`; без `userId` -
+  `400 invalid_user`; `userId` `900000007` (поза тестовим списком) - `403 user_not_allowed`, без `replies`.
+- **cmd-on-off-status** (U1) - `/digest` дає `Ранковий звіт: вимкнено.`; `/digest on` дає `Ранковий звіт
+  увімкнено.` і `/export` показує `digest.enabled == true`; `/digest` дає `Ранковий звіт: увімкнено.`;
+  `/digest off` дає `Ранковий звіт вимкнено.` і `/export` показує `digest.enabled == false`.
+- **cmd-bad-arg-and-export-key** (U2) - `/export` ще до всього має `digest` рівне `null`; `/digest 08:30`
+  дає `Не зрозумів. Команди: /digest on, /digest off`; `/export` і далі `digest == null`.
+- **disabled-sends-nothing** (U5, звіт не вмикали) - `POST /ingest/digest` дає `200`, `sent == false`,
+  `reason == "disabled"`, без звіту в `replies`.
+- **empty-day-silent** (U5 далі) - `/digest on`, нагадувань на сьогодні немає, `POST /ingest/digest` дає
+  `sent == false`, `reason == "empty"`, а `/export` показує `digest.lastSentOn == null`.
+- **digest-sent-with-reminder** (U3) - з `X-Test-Now=2026-09-16T06:00:00+03:00`: `/digest on` і `Remind me
+  today at 14:00 to take pills`, заголовок із `/export`; `POST /ingest/digest` з
+  `X-Test-Now=2026-09-16T07:00:00+03:00` дає `sent == true`, `replies` містить рівно один рядок, що
+  починається з `Доброго ранку` і містить збережений заголовок та `14:00`; `/export` показує
+  `digest.lastSentOn == "2026-09-16"`.
+- **idempotent-no-double-send** (U3 далі) - повторний `POST /ingest/digest` з тим самим `X-Test-Now`
+  дає `sent == false`, `reason == "already_sent"`, `replies` без заголовка нагадування, `lastSentOn` той
+  самий; з `X-Test-Now=2026-09-17T07:00:00+03:00` і новим нагадуванням на 17-те дає `sent == true`.
+- **only-today-listed** (U4) - із `X-Test-Now=2026-09-16T06:00:00+03:00`: `/digest on`, `Remind me today at
+  14:00 to call the bank` і `Remind me tomorrow at 11:00 to renew the passport`, обидва заголовки з
+  `/export` (розрізняються за `eventAt`); `POST /ingest/digest` з `X-Test-Now=2026-09-16T07:00:00+03:00`:
+  рівно один рядок `Доброго ранку`, містить заголовок 16-го і не містить заголовка 17-го.
+- **delivery-and-digest-both-arrive** (U6) - із `X-Test-Now=2026-09-16T06:00:00+03:00`: `/digest on` і
+  `Remind me today at 07:10 to stretch`, заголовок із `/export`. `POST /sweep` з
+  `X-Test-Now=2026-09-16T06:45:00+03:00`: `replies` містить рівно один рядок `Нагадування:` із заголовком
+  **і жодного** `Доброго ранку` (sweep звіту не шле). Потім `POST /ingest/digest` з
+  `X-Test-Now=2026-09-16T07:00:00+03:00`: один рядок `Доброго ранку` теж із заголовком; `/export`
+  показує сповіщення нагадування `status == "sent"` і `digest.lastSentOn == "2026-09-16"`.
 
-Юніт-тести, які імплементатор мусить додати (детерміновані, без мережі): `nextDueAfter` (звичайний день,
-перетин півночі, DST весна/осінь для `Europe/Kyiv`, `after` = рівно слот, ранній тик перед слотом не
-дає сьогоднішній слот знову); look-ahead відбір (`slot <= now + interval`); `isStale`; `DigestService`
-(порядок за `order`, розділ, що кидає виняток, не блокує решту, усі порожні дають `undefined`, ліміт
-15 рядків і точне "і ще N"); розділ нагадувань (лише сьогоднішня доба, `sent` лишається в списку, не `acked`, один рядок на
-нагадування з кількома сповіщеннями, сортування); відмова `ALLOWED_USERS` у `runDigests` (слот
-пересунуто, нічого не надіслано); розбір `/digest` (`7:30`, `07:30`, `25:99`, `on`, `off`, порожньо).
+Юніт-тести, які імплементатор мусить додати (детерміновані, без мережі): `localDay` (звичайний день,
+DST весна/осінь для `Europe/Kyiv`, доба 23 і 25 годин, `now` рівно опівночі); `DigestService` (порядок за
+`order`, розділ, що кидає виняток, не блокує решту, усі порожні дають `undefined`, ліміт 15 рядків і
+точне "і ще N"); розділ нагадувань (лише сьогоднішня доба, `sent` лишається в списку, не `acked`, один
+рядок на нагадування з кількома сповіщеннями, сортування, подія на весь день); `DigestRunnerService`
+(`disabled`, `already_sent`, `empty` без claim, програш claim у гонці, `send_failed` без повтору);
+порядок перевірок контролера (`401`, `400`, `403`); розбір `/digest` (`on`, `off`, порожньо, `08:30`,
+сміття).
 
 ## Закриті питання (рішення власника)
 
-1. **Порожній день:** звіт мовчить, нічого не надсилає. Критерії написано під це.
+1. **Порожній день:** звіт мовчить, нічого не надсилає.
 2. **Мова:** відповіді `/digest` і рядок у `HELP_TEXT` - українською.
-3. **Сповіщення сьогодні про подію іншого дня:** у звіт v1 не входить (окремий спек, коли знадобиться).
-4. **Розділ вимикається окремо?** **Вирішено (власник):** ні. У v1 вимикається лише весь звіт;
-   усі зареєстровані розділи завжди ввімкнені, а `/digest` керує лише часом і вкл/викл. Інтерфейс
-   (`id` розділу) уже дозволяє `/digest sections` пізніше без перебудови.
+3. **Сповіщення сьогодні про подію іншого дня:** у звіт v1 не входить.
+4. **Розділ вимикається окремо?** Ні. У v1 вимикається лише весь звіт; `/digest` керує лише вкл/викл.
+   Інтерфейс (`id` розділу) уже дозволяє `/digest sections` пізніше без перебудови.
+5. **Хто і коли запускає звіт (2026-11-02):** ранкова джоба о 07:00 після синку Garmin
+   ([0022](0022-morning-run.md)), не 30-хвилинний `/sweep`. Час звіту змінюється в Cloud Scheduler.
 
 ## Out of scope
 
-- **Розділ to-do.** Цей спек лише гарантує, що він додається без правок звіту. Сам to-do - окремий
-  спек.
-- **Розділи для симптомів, Garmin, нотаток.** Те саме правило: окремі спеки, окремі `DigestSection`.
+- **Розділ to-do.** Цей спек лише гарантує, що він додається без правок звіту.
+- **Розділи для симптомів, Garmin, нотаток.** Окремі спеки, окремі `DigestSection`
+  ([0018](0018-digest-garmin-sections.md) для Garmin).
 - **Часова зона на користувача** і `/timezone`.
-- **Звіт на запит** (`/today`): та сама `DigestService.build`, інша точка входу. Свідомо не тут, але
-  розділена збірка робить його дрібним доповненням.
-- **Вечірній підсумок**, тижневий огляд: той самий механізм (`nextDueAt` + розділи), інші слоти.
+- **Час звіту командою** (`/digest 08:30`) і будь-яке планування звіту всередині бота.
+- **Звіт на запит** (`/today`): та сама `DigestService.build`, інша точка входу (див. [0014](0014-calendar-sync.md)).
+- **Вечірній підсумок**, тижневий огляд: той самий механізм, інша джоба.
 - **Кнопки під звітом** (Готово/Відкласти на пункт). Звіт v1 - лише текст.
-- **Природномовне керування** ("надсилай звіт о 8"). Лише `/digest`.
-- **Точніше за 30 хвилин** і повтор невдалої відправки.
+- **Природномовне керування** ("вимкни звіт"). Лише `/digest`.
+- **Повтор невдалої відправки** і наздоганяння пропущеного дня.

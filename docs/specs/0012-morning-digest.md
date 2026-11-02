@@ -1,6 +1,6 @@
 ---
 id: 0012-morning-digest
-state: VERIFIED
+state: DONE
 attempt: 0
 max_attempts: 3
 branch: feat/0012-morning-digest

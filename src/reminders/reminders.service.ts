@@ -9,6 +9,18 @@ import { Recurrence, nextOccurrence, nextOccurrenceAfter, normalizeRecurrence } 
 /** The subcollection holding one document per nudge. Also the collection group the sweep queries. */
 export const NOTIFICATIONS = 'notifications';
 
+/**
+ * How many times one notification is tried before it is given up. One sweep makes one attempt, so
+ * at the default 30-minute interval this is about 90 minutes of retrying a Telegram outage.
+ */
+export const MAX_SEND_ATTEMPTS = 3;
+
+/**
+ * What {@link RemindersService.releaseAfterFailedSend} did: `retry` put the notification back to
+ * `scheduled` for the next sweep, `failed` gave it up for good.
+ */
+export type SendReleaseOutcome = 'retry' | 'failed';
+
 /** The part of a classified reminder the store needs; the rest of the draft is not persisted yet. */
 export interface ReminderDraftInput {
   title: string;
@@ -498,6 +510,56 @@ export class RemindersService {
       tx.update(ref, { status: 'sent', sentAt: Timestamp.fromDate(now) });
       return true;
     });
+  }
+
+  /**
+   * Undoes a claim whose delivery failed, so the reminder is not lost: inside a transaction, re-read
+   * the notification and - only while it is still the `sent` this claim wrote - count the attempt in
+   * `sendAttempts` and put it back to `scheduled`, where the next sweep's `findDue` finds it again.
+   * The {@link MAX_SEND_ATTEMPTS}th failure moves it to `failed` instead, which nothing queries, so a
+   * notification that can never be delivered (no chat, a blocked bot) stops being retried.
+   *
+   * The retry goes back through {@link claimForSend} like any other due notification, so the claim
+   * stays the only path to a send and two overlapping sweeps still cannot both deliver it.
+   *
+   * Returns `undefined` when nothing was written: the store is unavailable, or the notification is no
+   * longer `sent` (gone, or already moved by something else).
+   */
+  async releaseAfterFailedSend(ref: DocumentReference): Promise<SendReleaseOutcome | undefined> {
+    const db = this.firestore.db;
+    if (!db) {
+      return undefined;
+    }
+
+    const outcome = await db.runTransaction(async (tx) => {
+      const snapshot = await tx.get(ref);
+      if (!snapshot.exists || snapshot.get('status') !== 'sent') {
+        return undefined;
+      }
+
+      // An absent or unusable counter reads as no earlier failure.
+      const previous = snapshot.get('sendAttempts');
+      const earlier = Number.isSafeInteger(previous) && previous > 0 ? (previous as number) : 0;
+      const sendAttempts = earlier + 1;
+      if (sendAttempts >= MAX_SEND_ATTEMPTS) {
+        tx.update(ref, { status: 'failed', sendAttempts });
+        return 'failed' as const;
+      }
+
+      // Nothing was sent, so the claim's sentAt goes with it.
+      tx.update(ref, { status: 'scheduled', sendAttempts, sentAt: FieldValue.delete() });
+      return 'retry' as const;
+    });
+
+    // Ids and counts only, never the reminder's text.
+    if (outcome === 'failed') {
+      this.logger.warn(
+        `Gave up on notification ${ref.id} after ${MAX_SEND_ATTEMPTS} failed send attempts`,
+      );
+    } else if (outcome === 'retry') {
+      this.logger.log(`Notification ${ref.id} will be retried by the next sweep`);
+    }
+    return outcome;
   }
 
   /**

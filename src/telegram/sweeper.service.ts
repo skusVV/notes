@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RemindersService } from '../reminders/reminders.service';
+import {
+  DueNotification,
+  MAX_SEND_ATTEMPTS,
+  RemindersService,
+  SendReleaseOutcome,
+} from '../reminders/reminders.service';
 import { TelegramService } from './telegram.service';
 
 /**
@@ -77,8 +82,10 @@ export class SweeperService {
    *
    * Each notification is **claimed then sent**: the `scheduled -> sent` flip happens in a
    * transaction, and only the transaction's winner composes a delivery. Two overlapping ticks
-   * therefore cannot both notify. A send that fails is logged and left `sent` - for v1, losing one
-   * notification is preferable to the double-send a retry without a lease would risk.
+   * therefore cannot both notify. A send that fails releases the claim: the notification goes back
+   * to `scheduled` with its attempt counted, so the next tick claims and tries it again, and after
+   * {@link MAX_SEND_ATTEMPTS} failures it is marked `failed` and left alone. A retry is an ordinary
+   * claim, so the no-double-send guarantee holds for it too.
    *
    * The unit of work is the notification, not the reminder: one appointment with an evening-before
    * and a morning-of nudge is delivered by two separate ticks, each claiming its own document.
@@ -112,6 +119,7 @@ export class SweeperService {
     let sent = 0;
     for (const notification of due) {
       let claimed = false;
+      let retrying = false;
       try {
         claimed = await this.reminders.claimForSend(notification.ref, now);
         if (!claimed) {
@@ -125,14 +133,17 @@ export class SweeperService {
       } catch (error) {
         // Ids and counts only - the reminder's text is the user's private note.
         this.logger.error(`Failed to deliver notification ${notification.id}`, error as Error);
+        if (claimed) {
+          retrying = (await this.releaseClaim(notification)) === 'retry';
+        }
       }
 
-      // Roll a recurring reminder forward. Deliberately keyed on the CLAIM, not on the send: the
-      // claim already flipped this occurrence to `sent`, so skipping the roll-forward after a failed
-      // send would leave the reminder with no scheduled occurrence at all - it would stop recurring
-      // silently, which is worse than the one missed nudge. The store's own guard keeps this
-      // idempotent, so a retried tick cannot arm two.
-      if (claimed && notification.recurrence) {
+      // Roll a recurring reminder forward once this occurrence is finished with: delivered, given
+      // up, or stuck `sent` because the release itself failed. Not while it is waiting for a retry -
+      // it is `scheduled` again, and the retry that succeeds (or the last one that fails) arms the
+      // next occurrence then, so a reminder never stops recurring and never arms one per attempt.
+      // The store's own guard keeps this idempotent, so a retried tick cannot arm two either.
+      if (claimed && notification.recurrence && !retrying) {
         try {
           const next = await this.reminders.enqueueNextOccurrence(notification, now);
           if (next) {
@@ -149,5 +160,19 @@ export class SweeperService {
 
     this.logger.log(`Sweep delivered ${sent} of ${due.length} due notification(s)`);
     return sent;
+  }
+
+  /**
+   * Hands a claimed notification whose send failed back to the store for a retry, or gives it up.
+   * Never throws: if the release fails the notification simply stays `sent`, which is the old
+   * behaviour - one missed nudge, never a double one.
+   */
+  private async releaseClaim(notification: DueNotification): Promise<SendReleaseOutcome | undefined> {
+    try {
+      return await this.reminders.releaseAfterFailedSend(notification.ref);
+    } catch (error) {
+      this.logger.error(`Failed to release notification ${notification.id} for a retry`, error as Error);
+      return undefined;
+    }
   }
 }

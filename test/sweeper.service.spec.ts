@@ -198,6 +198,15 @@ describe('SweeperService.sweep', () => {
     expect(telegram.sendReminder).not.toHaveBeenCalled();
   });
 
+  it('releases nothing when the claim itself throws', async () => {
+    const { sweeper, reminders, telegram } = makeSweeper(store);
+    reminders.claimForSend.mockRejectedValueOnce(new Error('contention'));
+
+    expect(await sweeper.sweep(NOW)).toBe(0);
+    expect(telegram.sendReminder).not.toHaveBeenCalled();
+    expect(reminders.releaseAfterFailedSend).not.toHaveBeenCalled();
+  });
+
   it('claims before it sends, so a lost race can never notify', async () => {
     const order: string[] = [];
     const { sweeper, reminders, telegram } = makeSweeper(store);
@@ -366,12 +375,27 @@ describe('SweeperService.sweep for a recurring reminder', () => {
     expect(store.filter((n) => n.status === 'scheduled')).toHaveLength(1);
   });
 
-  // The recurrence must survive a failed send: the claim already flipped this occurrence to `sent`,
-  // so not arming the next one would silently stop the reminder forever.
-  it('still arms the next occurrence when the delivery fails', async () => {
+  // A failed send puts the occurrence back to `scheduled` for a retry (BUG-0003); it is still the
+  // reminder's one scheduled notification, so nothing is armed until it is finished with.
+  it('does not arm the next occurrence while a failed send waits for its retry', async () => {
     const store = recurringStore();
     const { sweeper, reminders, telegram } = makeSweeper(store);
     telegram.sendReminder.mockRejectedValueOnce(new Error('telegram is down'));
+
+    expect(await sweeper.sweep(TICK)).toBe(0);
+    expect(reminders.enqueueNextOccurrence).not.toHaveBeenCalled();
+    expect(store.filter((n) => n.status === 'scheduled').map((n) => n.id)).toEqual([
+      'occurrence-2027',
+    ]);
+  });
+
+  // The recurrence must survive a release that fails: the occurrence is then stuck `sent`, and not
+  // arming the next one would silently stop the reminder forever.
+  it('still arms the next occurrence when the release after a failed send throws', async () => {
+    const store = recurringStore();
+    const { sweeper, reminders, telegram } = makeSweeper(store);
+    telegram.sendReminder.mockRejectedValueOnce(new Error('telegram is down'));
+    reminders.releaseAfterFailedSend.mockRejectedValueOnce(new Error('transaction failed'));
 
     expect(await sweeper.sweep(TICK)).toBe(0);
     expect(reminders.enqueueNextOccurrence).toHaveBeenCalledTimes(1);

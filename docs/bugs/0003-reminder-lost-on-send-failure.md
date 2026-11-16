@@ -1,6 +1,6 @@
 ---
 id: 0003-reminder-lost-on-send-failure
-state: READY
+state: IMPLEMENTED
 severity: high
 attempt: 0
 max_attempts: 3

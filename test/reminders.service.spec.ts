@@ -1,8 +1,9 @@
-import { Timestamp } from '@google-cloud/firestore';
+import { FieldValue, Timestamp } from '@google-cloud/firestore';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Recurrence } from '../src/reminders/recurrence';
 import {
   DueNotification,
+  MAX_SEND_ATTEMPTS,
   NOTIFICATIONS,
   RemindersService,
 } from '../src/reminders/reminders.service';
@@ -377,6 +378,79 @@ describe('RemindersService.snoozeNotification', () => {
 
     expect(store.updates[0].status).toBe('scheduled');
     expect(store.updates[0]).not.toHaveProperty('expireAt');
+  });
+});
+
+/**
+ * A one-document fake for the release transaction: `tx.get` returns the stored fields and
+ * `tx.update` records (and applies) the write, so the state after a release can be asserted.
+ */
+function fakeClaimedNotification(data: Record<string, unknown> | undefined) {
+  const updates: Record<string, unknown>[] = [];
+  const ref = { id: 'notification-1' };
+  const db = {
+    runTransaction: async <T>(
+      body: (tx: {
+        get: (ref: unknown) => Promise<{ exists: boolean; get: (field: string) => unknown }>;
+        update: (ref: unknown, data: Record<string, unknown>) => void;
+      }) => Promise<T>,
+    ): Promise<T> =>
+      body({
+        get: async () => ({ exists: data !== undefined, get: (field: string) => data?.[field] }),
+        update: (_ref, write) => {
+          updates.push(write);
+        },
+      }),
+  };
+  return { updates, ref, service: new RemindersService({ db, available: true } as never) };
+}
+
+describe('RemindersService.releaseAfterFailedSend', () => {
+  it('allows three attempts', () => {
+    expect(MAX_SEND_ATTEMPTS).toBe(3);
+  });
+
+  // acceptance: repro-fixed (store half) - the claimed notification goes back to `scheduled`, so the
+  // next sweep's findDue sees it again, with the attempt counted
+  it('puts a first failed send back to scheduled and counts the attempt', async () => {
+    const store = fakeClaimedNotification({ status: 'sent' });
+
+    expect(await store.service.releaseAfterFailedSend(store.ref as never)).toBe('retry');
+    expect(store.updates).toHaveLength(1);
+    expect(store.updates[0].status).toBe('scheduled');
+    expect(store.updates[0].sendAttempts).toBe(1);
+    // The claim's sentAt is cleared: nothing was sent.
+    expect(store.updates[0].sentAt).toBeInstanceOf(FieldValue);
+  });
+
+  it('counts on from the stored attempts', async () => {
+    const store = fakeClaimedNotification({ status: 'sent', sendAttempts: 1 });
+
+    expect(await store.service.releaseAfterFailedSend(store.ref as never)).toBe('retry');
+    expect(store.updates[0]).toMatchObject({ status: 'scheduled', sendAttempts: 2 });
+  });
+
+  // acceptance: gives-up (store half) - the third failure is final
+  it('marks the notification failed on the third failed attempt', async () => {
+    const store = fakeClaimedNotification({ status: 'sent', sendAttempts: 2 });
+
+    expect(await store.service.releaseAfterFailedSend(store.ref as never)).toBe('failed');
+    expect(store.updates[0]).toMatchObject({ status: 'failed', sendAttempts: 3 });
+  });
+
+  it('leaves a notification that is no longer claimed untouched', async () => {
+    for (const data of [{ status: 'acked' }, { status: 'scheduled' }, undefined]) {
+      const store = fakeClaimedNotification(data);
+
+      expect(await store.service.releaseAfterFailedSend(store.ref as never)).toBeUndefined();
+      expect(store.updates).toHaveLength(0);
+    }
+  });
+
+  it('does nothing when the store is unavailable', async () => {
+    const service = new RemindersService({ db: undefined, available: false } as never);
+
+    expect(await service.releaseAfterFailedSend({ id: 'notification-1' } as never)).toBeUndefined();
   });
 });
 

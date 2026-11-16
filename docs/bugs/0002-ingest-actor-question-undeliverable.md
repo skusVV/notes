@@ -1,19 +1,31 @@
 ---
 id: 0002-ingest-actor-question-undeliverable
-state: OPEN
+state: READY
 severity: medium
 attempt: 0
 max_attempts: 3
 branch: fix/0002-ingest-actor-question-undeliverable
-acceptance: []
+acceptance:
+  - id: health
+    assert: "GET / returns HTTP 200 with body {\"status\":\"ok\"}"
+  - id: repro-fixed
+    assert: "POST /ingest/message (valid X-Ingest-Secret) with body {\"userId\":900000004,\"text\":\"Remind me tomorrow at 10:00 to call Zinovia\"} and X-Test-Now=2026-12-01T09:00:00+02:00 returns HTTP 200 with ok == true, a replies array confirming the reminder, and an actorQuestion object whose mention is 'Zinovia' and whose questionMessageId is a number"
+  - id: answer-works
+    assert: "Continuing from repro-fixed: POST a webhook update (valid secret) from user 900000004 in chat 900000004 with text 'my aunt from Lviv' and reply_to_message.message_id equal to that questionMessageId; a '/export' from 900000004 then shows an actor named 'Zinovia' whose notes equal 'my aunt from Lviv'"
+  - id: webhook-unchanged
+    assert: "POST a webhook update from user 900000005 with text 'Remind me tomorrow at 10:00 to call Yaroslava' and X-Test-Now=2026-12-01T09:00:00+02:00; the response has an actorQuestion with mention 'Yaroslava', exactly as before the fix"
+  - id: reply-to-only-for-real-messages
+    assert: "npm test passes and includes a regression test, failing on the pre-fix code, asserting that the actor question for an ingested message is sent with no reply_to_message_id, while for a webhook message it is still sent with reply_to_message_id equal to the user's message_id"
+  - id: no-regression-ingest
+    assert: "POST /ingest/message with {\"userId\":900000004,\"text\":\"/version\"} returns 200 with a reply starting 'notes-bot '; with {\"userId\":900000004,\"text\":\"   \"} it returns 400"
 failures: []
 ---
 
 # BUG-0002 - "Who is this?" question from `/ingest/message` cannot reach the owner
 
 > **OPEN.** Found 2026-11-01 by the spec-implementer for 0013 and confirmed in the verifier's notes.
-> **Root cause is a hypothesis until the implementer reproduces it.** Do not move to `READY` before
-> the reproduction below is confirmed against the test function.
+> **READY 2026-11-16** (owner). Root cause confirmed by reading the code (see below). Unique names
+> (Zinovia, Yaroslava) avoid colliding with actors already stored for the test users.
 
 ## Symptom
 
@@ -32,12 +44,21 @@ The reminder itself is still saved and confirmed, so the failure is quiet.
 
 ## Root cause
 
-Hypothesis: the actor question is sent as a **reply** to the user's message, using that message's
-`message_id`. A message from `/ingest` has a made-up `message_id` that Telegram does not know, so the
-reply-to send fails, the existing code catches and logs it, and nothing is delivered. The ingest path
-also does not pass `actorAsks`, so the question is not even reflected in the test response. See
-`handleIngestedText` in [telegram.service.ts](../../src/telegram/telegram.service.ts) and the actor
-question send. To be confirmed.
+**Confirmed by reading the code (2026-11-16); still to be seen live on the test function.**
+`handleIngestedText` ([telegram.service.ts](../../src/telegram/telegram.service.ts), around line 429)
+builds a synthetic update whose `message_id` is the current epoch-milliseconds stamp, a message
+Telegram has never seen. `askAboutNewMention` (around line 1092) sends the question with
+`reply_to_message_id` set to that id. In production `sendMessage` has no `sink`, so Telegram's
+"message to be replied not found" error is thrown, caught by `askAboutNewMention`, logged, and
+dropped: no question is sent and no pending question is stored. On the test function the reflect
+`sink` hides it, because a failed send there returns a synthetic id and carries on. That is why the
+0013 verification did not catch it.
+Second half: `handleIngestedText` calls `handleUpdate` without `actorAsks`, and the ingest controller
+has no `actorQuestion` in its response, so even in reflect mode a test cannot see or answer the
+question.
+
+Answering is unaffected once the question is delivered. The pending match compares against the
+*bot's question* message id (`pending.questionMessageId`), not the user's original message.
 
 ## Fix scope
 

@@ -48,5 +48,7 @@ loses nothing; `low` is cosmetic or only affects tests and tooling.
 
 | Bug | State | Severity | Summary |
 |---|---|---|---|
-| [0001-classifier-reminder-tests-stale](0001-classifier-reminder-tests-stale.md) | OPEN | low | Two classifier reminder tests fail because their fixtures lack the new `evidence` field. |
-| [0002-ingest-actor-question-undeliverable](0002-ingest-actor-question-undeliverable.md) | OPEN | medium | A "who is this?" question raised by text sent through `/ingest/message` cannot reach the owner. |
+| [0001-classifier-reminder-tests-stale](0001-classifier-reminder-tests-stale.md) | DONE | low | Two classifier reminder tests fail because their fixtures lack the new `evidence` field. |
+| [0002-ingest-actor-question-undeliverable](0002-ingest-actor-question-undeliverable.md) | READY | medium | A "who is this?" question raised by text sent through `/ingest/message` cannot reach the owner. |
+| [0003-reminder-lost-on-send-failure](0003-reminder-lost-on-send-failure.md) | READY | high | A reminder whose Telegram send fails is marked `sent` and never retried. |
+| [0004-done-does-not-close-after-ignored-nudge](0004-done-does-not-close-after-ignored-nudge.md) | READY | medium | Tapping Done does not close a reminder if an earlier nudge was left untapped. |

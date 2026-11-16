@@ -4,15 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Telegram echo bot: a NestJS (v11, TypeScript) HTTP handler deployed as a **gen2 GCP Cloud
+A Telegram personal-memory bot (it started as an echo bot): a NestJS (v11, TypeScript) HTTP handler deployed as a **gen2 GCP Cloud
 Function**, redeployed automatically by a Cloud Build GitHub push trigger. The repo root *is* the
 function source (`--source=.` in [cloudbuild.yaml](cloudbuild.yaml)) - do not move the app into a
 subfolder without also updating the trigger's `--build-config` and the deploy step.
 
-Planned next: a persistence layer turning the bot into a personal memory (reminders, symptom
-tracking, notes, retrieval, people). Nothing is implemented yet - the design, the build order and
-the decisions already settled live in [docs/architecture.md](docs/architecture.md). Read it before
-adding storage, a classifier, or anything scheduled.
+Reminders, notes, symptoms, people (actors), the morning digest and `/ingest` are implemented and
+persisted in Firestore. Work is planned and tracked as specs in [docs/specs/](docs/specs/README.md)
+and bugs in [docs/bugs/](docs/bugs/README.md). The overall design lives in
+[docs/architecture.md](docs/architecture.md). Read it before adding storage, a classifier, or
+anything scheduled.
 
 
 ## Commands
@@ -21,6 +22,7 @@ adding storage, a classifier, or anything scheduled.
 npm run build           # nest build -> dist/
 npm run start:local     # Nest dev server on $PORT (8080), watch mode
 npm run start:function  # build + serve the real Cloud Functions entry point via functions-framework
+npm test                # vitest unit tests (test/)
 ```
 
 Deploys happen by pushing to the trigger's branch, or via **Run** on the trigger in the Cloud Build
@@ -29,8 +31,8 @@ console - never by running the deploy command locally. Local `gcloud` use is gov
 and operations in [README.md](README.md) stay Cloud Console click-paths, so keep any new
 instructions UI-based.
 
-There is **no test framework configured**. Verify changes by running the actual function entry
-point and curling it - this exercises `src/index.ts`, the Nest bootstrap, and the secret check,
+Unit tests run with **vitest** (`npm test`, files in `test/`); there is no lint script. Unit tests do
+not cover the deployed wiring, so also verify by running the actual function entry point and curling it - this exercises `src/index.ts`, the Nest bootstrap, and the secret check,
 which `start:local` does not:
 
 ```bash

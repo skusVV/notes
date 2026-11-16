@@ -1,6 +1,6 @@
 ---
 id: 0001-classifier-reminder-tests-stale
-state: OPEN
+state: DONE
 severity: low
 attempt: 0
 max_attempts: 3
@@ -11,7 +11,11 @@ failures: []
 
 # BUG-0001 - Two classifier reminder tests fail on `main`
 
-> **OPEN.** Found 2026-11-01 while implementing spec 0013: `npm test` shows `2 failed | 190 passed`,
+> **DONE 2026-11-16.** Fixed by commit `858c7c7` ("Fix two classifier tests missing recurrence
+> evidence"), outside the pipeline: the two fixtures now carry `evidence`. Re-checked 2026-11-16:
+> `npm test` is 21 files / 279 tests, all passing.
+>
+> Originally found 2026-11-01 while implementing spec 0013: `npm test` shows `2 failed | 190 passed`,
 > and the same two fail on the base commit without any 0013 change.
 
 ## Symptom

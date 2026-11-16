@@ -1,6 +1,6 @@
 ---
 id: 0010-garmin-health-sync
-state: READY
+state: DRAFT
 attempt: 0
 max_attempts: 3
 branch: feat/0010-garmin-health-sync

@@ -1,6 +1,6 @@
 ---
 id: 0003-reminder-lost-on-send-failure
-state: VERIFIED
+state: DONE
 severity: high
 attempt: 0
 max_attempts: 3

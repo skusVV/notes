@@ -15,7 +15,7 @@ acceptance:
   - id: recurrence-once
     assert: "npm test includes a passing test: a recurring notification whose first send fails and second succeeds ends with exactly one next-occurrence notification in status 'scheduled'"
   - id: delivery-unchanged
-    assert: "With X-Test-Now=2026-12-01T09:00:00+02:00, from user 900000006 POST 'Remind me today at 14:00 to water the plants'; POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-12-01T13:45:00+02:00 and the reflected replies contain exactly one string starting with 'Нагадування:' that contains 'water the plants'; a second POST /sweep at the same X-Test-Now reflects no such string; '/export' from 900000006 shows that notification with status 'sent'"
+    assert: "With X-Test-Now=2026-12-01T09:00:00+02:00, from user 900000006 POST 'Remind me today at 14:00 to water the plants'; POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-12-01T13:45:00+02:00 and the reflected replies contain exactly one string starting with 'Нагадування:' that contains 'water the plants' (case-insensitive, since the classifier may capitalise the title); a second POST /sweep at the same X-Test-Now reflects no such string; '/export' from 900000006 shows that notification with status 'sent'"
 failures:
   - attempt: 0
     stage: deploy

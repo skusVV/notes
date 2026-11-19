@@ -780,3 +780,129 @@ describe('RemindersService.ackNotification', () => {
     expect(store.reminderUpdates).toHaveLength(0);
   });
 });
+
+/**
+ * An in-memory reminder with its notifications, for the Done-closes-the-reminder rules. State lives
+ * in plain objects, so the test asserts where every document ends up rather than which calls were
+ * made. It answers both the plain document API (`ref.update`, a `where ... in` query) and a
+ * transaction (`tx.get` of the reminder or its notifications collection, buffered `tx.update`s
+ * applied on commit). `failTransaction` makes the transaction throw before it writes anything.
+ */
+function fakeReminderTree(
+  reminderData: Record<string, unknown>,
+  notificationDocs: { id: string; data: Record<string, unknown> }[],
+  options: { failTransaction?: boolean } = {},
+) {
+  const reminder = { ...reminderData };
+  const stored = new Map(notificationDocs.map((doc) => [doc.id, { ...doc.data }]));
+
+  const snapshotOf = (id: string) => ({
+    id,
+    exists: stored.has(id),
+    ref: notificationRef(id),
+    data: () => stored.get(id),
+    get: (field: string) => stored.get(id)?.[field],
+  });
+  const querySnapshot = (ids: string[]) => {
+    const docs = ids.map(snapshotOf);
+    return { docs, empty: docs.length === 0, size: docs.length };
+  };
+
+  const notifications = {
+    kind: 'notifications',
+    get: async () => querySnapshot([...stored.keys()]),
+    doc: (id: string) => notificationRef(id),
+    where: (field: string, op: string, value: unknown) => {
+      expect(op).toBe('in');
+      const matching = () =>
+        [...stored.keys()].filter((id) => (value as unknown[]).includes(stored.get(id)?.[field]));
+      return {
+        get: async () => querySnapshot(matching()),
+        limit: (n: number) => ({ get: async () => querySnapshot(matching().slice(0, n)) }),
+      };
+    },
+  };
+
+  const reminderRef: Record<string, unknown> = {
+    id: 'reminder-1',
+    kind: 'reminder',
+    collection: (name: string) => {
+      expect(name).toBe(NOTIFICATIONS);
+      return notifications;
+    },
+    update: async (data: Record<string, unknown>) => void Object.assign(reminder, data),
+  };
+
+  function notificationRef(id: string): Record<string, unknown> {
+    return {
+      id,
+      kind: 'notification',
+      parent: { parent: reminderRef },
+      update: async (data: Record<string, unknown>) => {
+        if (!stored.has(id)) {
+          throw new Error(`no notification ${id}`);
+        }
+        Object.assign(stored.get(id) as Record<string, unknown>, data);
+      },
+    };
+  }
+
+  const db = {
+    runTransaction: async <T>(
+      body: (tx: {
+        get: (target: unknown) => Promise<unknown>;
+        update: (ref: unknown, data: Record<string, unknown>) => void;
+      }) => Promise<T>,
+    ): Promise<T> => {
+      if (options.failTransaction) {
+        throw new Error('firestore unavailable');
+      }
+      const pending: { ref: Record<string, unknown>; data: Record<string, unknown> }[] = [];
+      const result = await body({
+        get: async (target) => {
+          const kind = (target as { kind?: string }).kind;
+          if (kind === 'reminder') {
+            return { id: 'reminder-1', exists: true, data: () => reminder, get: (f: string) => reminder[f] };
+          }
+          if (kind === 'notifications') {
+            return querySnapshot([...stored.keys()]);
+          }
+          throw new Error(`unexpected transaction read of ${kind}`);
+        },
+        update: (ref, data) => void pending.push({ ref: ref as Record<string, unknown>, data }),
+      });
+      for (const write of pending) {
+        await (write.ref.update as (data: Record<string, unknown>) => Promise<void>)(write.data);
+      }
+      return result;
+    },
+  };
+
+  return {
+    reminder,
+    status: (id: string) => stored.get(id)?.status,
+    ref: (id: string) => notificationRef(id),
+    service: new RemindersService({ db, available: true } as never),
+  };
+}
+
+const ONE_OFF = { status: 'scheduled', title: 'dentist', eventAt: '2026-12-10T14:00:00+02:00' };
+
+describe('RemindersService.ackNotification on a reminder with several nudges (BUG-0004)', () => {
+  const ACK_NOW = new Date('2026-12-10T09:05:00+02:00');
+
+  // BUG-0004 acceptance: unit-regression / repro-fixed - the evening-before nudge was delivered and
+  // never tapped, then Done on the morning-of nudge. The ignored one must not keep the reminder open.
+  it('closes a one-off reminder when an earlier nudge was left sent', async () => {
+    const store = fakeReminderTree(ONE_OFF, [
+      { id: 'evening', data: { status: 'sent', userId: USER } },
+      { id: 'morning', data: { status: 'sent', userId: USER } },
+    ]);
+
+    await store.service.ackNotification(store.ref('morning') as never, USER, ACK_NOW);
+
+    expect(store.reminder.status).toBe('acked');
+    expect(store.status('morning')).toBe('acked');
+    expect(store.status('evening')).toBe('acked');
+  });
+});

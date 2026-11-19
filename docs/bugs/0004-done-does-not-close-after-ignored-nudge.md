@@ -1,6 +1,6 @@
 ---
 id: 0004-done-does-not-close-after-ignored-nudge
-state: READY
+state: IN-PROGRESS
 severity: medium
 attempt: 0
 max_attempts: 3

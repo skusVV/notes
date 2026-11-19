@@ -1,8 +1,8 @@
 ---
 id: 0003-reminder-lost-on-send-failure
-state: BLOCKED
+state: VERIFIED
 severity: high
-attempt: 1
+attempt: 0
 max_attempts: 3
 branch: fix/0003-reminder-lost-on-send-failure
 acceptance:
@@ -60,6 +60,13 @@ failures:
 ---
 
 # BUG-0003 - A reminder whose Telegram send fails is never delivered
+
+> **VERIFIED 2026-11-19** (spec-verifier) on telegram-echo-bot-test, live revision 3507f3d (nodejs24).
+> All 5 criteria pass; security pass ATTENTION (pre-existing AxiosError log dump, filed separately).
+> `delivery-unchanged` was re-judged against the amended case-insensitive criterion (df6f0c5) from the
+> evidence recorded on 2026-11-19 at 18:13 UTC on that revision, with no redeploy: one
+> 'Нагадування: Water the plants' delivery on the first sweep, none on the second, notification
+> KIehP9UupZCAebM1p87E `sent`. The two `failures` entries are history (runtime block, criterion wording).
 
 > **READY 2026-11-16** (owner). Found the same day in a housekeeping review, by reading the code.
 > Decision: at most **3 send attempts** (3 sweeps, about 90 minutes), then status `failed`. A failed

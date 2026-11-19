@@ -1,8 +1,8 @@
 ---
 id: 0003-reminder-lost-on-send-failure
-state: IN-TESTING
+state: BLOCKED
 severity: high
-attempt: 0
+attempt: 1
 max_attempts: 3
 branch: fix/0003-reminder-lost-on-send-failure
 acceptance:
@@ -38,6 +38,25 @@ failures:
       deliver notification' log passes the whole AxiosError to Nest's logger, which prints the bot token
       from baseURL and the reminder text from the request body; pre-existing, but the retry makes it up to
       3 times per notification - worth its own bug).
+  - attempt: 0
+    stage: verification
+    detail: >-
+      Criterion conflict, not an implementation defect - needs the owner. Deploy of 3507f3d (fix/0003 rebased
+      on 08b58fd + lane commit) succeeded on telegram-echo-bot-test (build 17:13:24-17:17:03 UTC, runtime
+      nodejs24, state ACTIVE) and was proven live when 900000006's /export flipped from no 'allDay' key
+      (17:13:11 UTC) to carrying it (18:12:32 and 18:12:54 UTC). 4 of 5 criteria PASS: health (GET / 200
+      {"status":"ok"} at 18:13:09 UTC on the new revision), repro-fixed, gives-up, recurrence-once (npm test
+      292/292 on 9082229; the 11 new tests fail on the tests-only commit f1803a0). delivery-unchanged FAILS
+      as written only on letter case: the capture (X-Test-Now 2026-12-01T09:00+02:00) was stored as
+      reminder khEm3YXIUIAUNuL7vHjq with title 'Water the plants' (the classifier capitalised it); the
+      13:45 sweep reflected exactly one matching reply, 'Нагадування: Water the plants' + 'Сьогодні о 14:00',
+      the second sweep at the same time reflected none, and /export shows notification KIehP9UupZCAebM1p87E
+      (2026-12-01T14:00+02:00) with status 'sent'. A case-sensitive "contains 'water the plants'" therefore
+      counts 0, not 1; case-insensitively it is exactly 1 then 0. The title's case comes from the classifier,
+      which is outside this bug's Fix scope, so rework cannot change it. Owner decision: amend the criterion
+      to match case-insensitively (or to 'Water the plants'), then re-run verification - the substance
+      (delivered once, not again, stored 'sent') already holds. Security pass ATTENTION, not FAIL (E/F: the
+      pre-existing AxiosError dump in the delivery-failure log, to be filed separately).
 ---
 
 # BUG-0003 - A reminder whose Telegram send fails is never delivered

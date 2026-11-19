@@ -21,6 +21,9 @@ export const MAX_SEND_ATTEMPTS = 3;
  */
 export type SendReleaseOutcome = 'retry' | 'failed';
 
+/** Notification statuses meaning "this nudge is not finished": armed, or delivered and not done. */
+const PENDING: unknown[] = ['scheduled', 'sent'];
+
 /** The part of a classified reminder the store needs; the rest of the draft is not persisted yet. */
 export interface ReminderDraftInput {
   title: string;
@@ -610,35 +613,79 @@ export class RemindersService {
   }
 
   /**
-   * Marks one delivered notification done. No time changes: the reminder's other notifications
-   * still fire, and `eventAt` is never rewritten.
+   * Marks one delivered notification done. No time changes, and `eventAt` is never rewritten.
    *
-   * Then closes the reminder itself when nothing of it is still pending - no notification left
-   * `scheduled` or `sent` - so the digest stops listing it. A reminder with a second nudge still to
-   * come stays open, and so does a recurring one, whose next occurrence is already `scheduled`.
+   * Then settles the reminder itself, in one transaction so it can never be left closed with a
+   * nudge still armed:
+   *
+   * - A **one-off** reminder closes: Done means the thing itself is done, whichever nudge was
+   *   tapped. Its other delivered (`sent`) notifications are acked with it - an earlier nudge the
+   *   user ignored must not hold the reminder open - and its not-yet-fired (`scheduled`) ones become
+   *   `cancelled`, which the sweep never queries, so they never fire. `failed` ones are left as they
+   *   are and do not block the close.
+   * - A **recurring** reminder keeps the earlier rule: it closes only when no notification is still
+   *   `scheduled` or `sent`, so one whose next occurrence is already armed stays open, and its other
+   *   notifications are never touched.
+   *
    * A failure of that second step is logged, not thrown: the tap is already recorded on the
    * notification, and the user must not see it fail.
    */
   async ackNotification(ref: DocumentReference, userId: number, now: Date): Promise<void> {
-    await ref.update({ status: 'acked', ackedAt: Timestamp.fromDate(now) });
+    const ackedAt = Timestamp.fromDate(now);
+    await ref.update({ status: 'acked', ackedAt });
     this.logger.log(`Acked notification ${ref.id} for user ${userId}`);
 
+    const db = this.firestore.db;
     const reminderRef = ref.parent.parent;
-    if (!reminderRef) {
+    if (!db || !reminderRef) {
       return;
     }
     try {
-      // One field, so Firestore's automatic single-field index serves it - no composite index.
-      const pending = await reminderRef
-        .collection(NOTIFICATIONS)
-        .where('status', 'in', ['scheduled', 'sent'])
-        .limit(1)
-        .get();
-      if (!pending.empty) {
-        return;
+      const settled = await db.runTransaction(async (tx) => {
+        // Every read before any write, as a Firestore transaction requires.
+        const reminder = await tx.get(reminderRef);
+        if (!reminder.exists) {
+          return undefined;
+        }
+        const others = (await tx.get(reminderRef.collection(NOTIFICATIONS))).docs.filter(
+          (doc) => doc.id !== ref.id,
+        );
+
+        const recurring =
+          isPresent(reminder.get('recurrence')) ||
+          others.some((doc) => isPresent(doc.get('recurrence')));
+        if (recurring) {
+          const pending = others.some((doc) => PENDING.includes(doc.get('status')));
+          if (pending) {
+            return undefined;
+          }
+          tx.update(reminderRef, { status: 'acked', ackedAt });
+          return { acked: 0, cancelled: 0 };
+        }
+
+        let acked = 0;
+        let cancelled = 0;
+        for (const doc of others) {
+          const status = doc.get('status');
+          if (status === 'sent') {
+            tx.update(doc.ref, { status: 'acked', ackedAt });
+            acked += 1;
+          } else if (status === 'scheduled') {
+            tx.update(doc.ref, { status: 'cancelled', cancelledAt: ackedAt });
+            cancelled += 1;
+          }
+        }
+        tx.update(reminderRef, { status: 'acked', ackedAt });
+        return { acked, cancelled };
+      });
+
+      if (settled) {
+        // Ids and counts only, never the reminder's text.
+        this.logger.log(
+          `Closed reminder ${reminderRef.id} for user ${userId} ` +
+            `(acked ${settled.acked}, cancelled ${settled.cancelled} other notification(s))`,
+        );
       }
-      await reminderRef.update({ status: 'acked', ackedAt: Timestamp.fromDate(now) });
-      this.logger.log(`Closed reminder ${reminderRef.id} for user ${userId}`);
     } catch (error) {
       // Ids only, never the reminder's text.
       this.logger.error(
@@ -716,6 +763,11 @@ export class RemindersService {
 function recurrenceZone(value: unknown): string {
   const zone = (value as { timezone?: unknown } | null)?.timezone;
   return typeof zone === 'string' ? zone : '';
+}
+
+/** Whether a stored field is set at all; `null` counts as unset, the same reading as everywhere else. */
+function isPresent(value: unknown): boolean {
+  return value !== undefined && value !== null;
 }
 
 /** Serialise a Firestore Timestamp as a plain ISO string; anything else becomes empty. */

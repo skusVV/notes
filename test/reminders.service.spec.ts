@@ -668,120 +668,6 @@ describe('RemindersService.list', () => {
 });
 
 /**
- * A fake for `ackNotification`: one notification ref whose parent reminder owns the notifications
- * in `siblings` (statuses after the tap). The pending query filters them by `status in [...]`, so
- * the test proves the rule rather than a canned answer. `failQuery` makes the second step throw.
- */
-function fakeAck(siblings: string[], options: { failQuery?: boolean } = {}) {
-  const notificationUpdates: Record<string, unknown>[] = [];
-  const reminderUpdates: Record<string, unknown>[] = [];
-  let filter: { field: string; op: string; value: unknown } | undefined;
-
-  const reminderRef = {
-    id: 'reminder-1',
-    update: async (data: Record<string, unknown>) => void reminderUpdates.push(data),
-    collection: (name: string) => {
-      expect(name).toBe(NOTIFICATIONS);
-      return {
-        where: (field: string, op: string, value: unknown) => {
-          filter = { field, op, value };
-          return {
-            limit: (n: number) => ({
-              get: async () => {
-                if (options.failQuery) {
-                  throw new Error('firestore unavailable');
-                }
-                const allowed = value as string[];
-                const matched = siblings.filter((status) => allowed.includes(status)).slice(0, n);
-                return { empty: matched.length === 0 };
-              },
-            }),
-          };
-        },
-      };
-    },
-  };
-  const ref = {
-    id: 'notification-1',
-    parent: { parent: reminderRef },
-    update: async (data: Record<string, unknown>) => void notificationUpdates.push(data),
-  };
-
-  return {
-    ref,
-    notificationUpdates,
-    reminderUpdates,
-    filter: () => filter,
-    service: new RemindersService({ db: {}, available: true } as never),
-  };
-}
-
-describe('RemindersService.ackNotification', () => {
-  const ACK_NOW = new Date('2026-10-14T14:05:00+03:00');
-
-  // 0023 acceptance: done-removes-from-digest - the only notification acked closes the reminder
-  it('closes the reminder when its only notification is acked', async () => {
-    const store = fakeAck(['acked']);
-
-    await store.service.ackNotification(store.ref as never, USER, ACK_NOW);
-
-    expect(store.notificationUpdates).toEqual([
-      { status: 'acked', ackedAt: Timestamp.fromDate(ACK_NOW) },
-    ]);
-    expect(store.filter()).toEqual({ field: 'status', op: 'in', value: ['scheduled', 'sent'] });
-    expect(store.reminderUpdates).toEqual([
-      { status: 'acked', ackedAt: Timestamp.fromDate(ACK_NOW) },
-    ]);
-  });
-
-  it('keeps the reminder open while its other notification is still scheduled', async () => {
-    const store = fakeAck(['acked', 'scheduled']);
-
-    await store.service.ackNotification(store.ref as never, USER, ACK_NOW);
-
-    expect(store.notificationUpdates).toHaveLength(1);
-    expect(store.reminderUpdates).toHaveLength(0);
-  });
-
-  it('keeps the reminder open while another notification is sent but not done', async () => {
-    const store = fakeAck(['acked', 'sent']);
-
-    await store.service.ackNotification(store.ref as never, USER, ACK_NOW);
-
-    expect(store.reminderUpdates).toHaveLength(0);
-  });
-
-  // 0023 acceptance: recurring-done-keeps-reminder - the next occurrence is already scheduled
-  it('does not close a recurring reminder whose next occurrence is armed', async () => {
-    const store = fakeAck(['acked', 'scheduled']);
-
-    await store.service.ackNotification(store.ref as never, USER, ACK_NOW);
-
-    expect(store.reminderUpdates).toHaveLength(0);
-  });
-
-  it('closes the reminder once every notification is done', async () => {
-    const store = fakeAck(['acked', 'acked']);
-
-    await store.service.ackNotification(store.ref as never, USER, ACK_NOW);
-
-    expect(store.reminderUpdates).toHaveLength(1);
-    expect(store.reminderUpdates[0].status).toBe('acked');
-  });
-
-  // The tap is already recorded on the notification; a failed close must not surface as an error.
-  it('does not throw when closing the reminder fails', async () => {
-    const store = fakeAck(['acked'], { failQuery: true });
-
-    await expect(
-      store.service.ackNotification(store.ref as never, USER, ACK_NOW),
-    ).resolves.toBeUndefined();
-    expect(store.notificationUpdates).toHaveLength(1);
-    expect(store.reminderUpdates).toHaveLength(0);
-  });
-});
-
-/**
  * An in-memory reminder with its notifications, for the Done-closes-the-reminder rules. State lives
  * in plain objects, so the test asserts where every document ends up rather than which calls were
  * made. It answers both the plain document API (`ref.update`, a `where ... in` query) and a
@@ -881,12 +767,60 @@ function fakeReminderTree(
   return {
     reminder,
     status: (id: string) => stored.get(id)?.status,
+    doc: (id: string) => stored.get(id),
     ref: (id: string) => notificationRef(id),
     service: new RemindersService({ db, available: true } as never),
   };
 }
 
 const ONE_OFF = { status: 'scheduled', title: 'dentist', eventAt: '2026-12-10T14:00:00+02:00' };
+
+describe('RemindersService.ackNotification', () => {
+  const ACK_NOW = new Date('2026-10-14T14:05:00+03:00');
+  const ACKED = { status: 'acked', ackedAt: Timestamp.fromDate(ACK_NOW) };
+
+  // 0023 acceptance: done-removes-from-digest - the only notification acked closes the reminder
+  it('closes the reminder when its only notification is acked', async () => {
+    const store = fakeReminderTree(ONE_OFF, [{ id: 'only', data: { status: 'sent' } }]);
+
+    await store.service.ackNotification(store.ref('only') as never, USER, ACK_NOW);
+
+    expect(store.doc('only')).toEqual(ACKED);
+    expect(store.reminder).toMatchObject(ACKED);
+  });
+
+  it('closes the reminder once every notification is done', async () => {
+    const store = fakeReminderTree(ONE_OFF, [
+      { id: 'first', data: { status: 'acked' } },
+      { id: 'second', data: { status: 'sent' } },
+    ]);
+
+    await store.service.ackNotification(store.ref('second') as never, USER, ACK_NOW);
+
+    expect(store.reminder.status).toBe('acked');
+    expect(store.status('first')).toBe('acked');
+  });
+
+  // The tap is already recorded on the notification; a failed close must not surface as an error,
+  // and - the close and the cancel being one transaction - nothing else is half-written.
+  it('does not throw when closing the reminder fails, and leaves the rest untouched', async () => {
+    const store = fakeReminderTree(
+      ONE_OFF,
+      [
+        { id: 'first', data: { status: 'sent' } },
+        { id: 'second', data: { status: 'scheduled' } },
+      ],
+      { failTransaction: true },
+    );
+
+    await expect(
+      store.service.ackNotification(store.ref('first') as never, USER, ACK_NOW),
+    ).resolves.toBeUndefined();
+    expect(store.status('first')).toBe('acked');
+    expect(store.status('second')).toBe('scheduled');
+    expect(store.reminder.status).toBe('scheduled');
+  });
+});
 
 describe('RemindersService.ackNotification on a reminder with several nudges (BUG-0004)', () => {
   const ACK_NOW = new Date('2026-12-10T09:05:00+02:00');
@@ -904,5 +838,90 @@ describe('RemindersService.ackNotification on a reminder with several nudges (BU
     expect(store.reminder.status).toBe('acked');
     expect(store.status('morning')).toBe('acked');
     expect(store.status('evening')).toBe('acked');
+  });
+
+  // BUG-0004 acceptance: later-nudge-cancelled - Done on the first nudge closes the reminder and
+  // cancels the one still to come, so no notification of it is left for the sweep's findDue.
+  it('cancels a one-off reminder\'s nudges that have not fired yet', async () => {
+    const store = fakeReminderTree(ONE_OFF, [
+      { id: 'evening', data: { status: 'sent' } },
+      { id: 'morning', data: { status: 'scheduled' } },
+    ]);
+
+    await store.service.ackNotification(store.ref('evening') as never, USER, ACK_NOW);
+
+    expect(store.reminder.status).toBe('acked');
+    expect(store.status('evening')).toBe('acked');
+    expect(store.doc('morning')).toEqual({
+      status: 'cancelled',
+      cancelledAt: Timestamp.fromDate(ACK_NOW),
+    });
+  });
+
+  // A nudge given up after failed sends (BUG-0003) is finished; it neither blocks nor is rewritten.
+  it('closes a one-off reminder past a failed nudge and leaves that nudge failed', async () => {
+    const store = fakeReminderTree(ONE_OFF, [
+      { id: 'evening', data: { status: 'failed', sendAttempts: 3 } },
+      { id: 'morning', data: { status: 'sent' } },
+    ]);
+
+    await store.service.ackNotification(store.ref('morning') as never, USER, ACK_NOW);
+
+    expect(store.reminder.status).toBe('acked');
+    expect(store.doc('evening')).toEqual({ status: 'failed', sendAttempts: 3 });
+  });
+
+  it('leaves already-finished nudges of a one-off as they were', async () => {
+    const store = fakeReminderTree(ONE_OFF, [
+      { id: 'evening', data: { status: 'cancelled' } },
+      { id: 'noon', data: { status: 'acked', ackedAt: 'earlier' } },
+      { id: 'morning', data: { status: 'sent' } },
+    ]);
+
+    await store.service.ackNotification(store.ref('morning') as never, USER, ACK_NOW);
+
+    expect(store.doc('evening')).toEqual({ status: 'cancelled' });
+    expect(store.doc('noon')).toEqual({ status: 'acked', ackedAt: 'earlier' });
+  });
+
+  // 0023 acceptance: recurring-done-keeps-reminder / BUG-0004 recurring-unchanged - only the tapped
+  // occurrence is acked; the reminder stays open and the next occurrence stays armed.
+  it('does not close a recurring reminder whose next occurrence is armed', async () => {
+    const DAILY = { freq: 'daily', atLocal: '15:00', timezone: 'Europe/Kyiv' };
+    const store = fakeReminderTree({ status: 'scheduled', recurrence: DAILY }, [
+      { id: 'today', data: { status: 'sent', recurrence: DAILY } },
+      { id: 'tomorrow', data: { status: 'scheduled', recurrence: DAILY } },
+    ]);
+
+    await store.service.ackNotification(store.ref('today') as never, USER, ACK_NOW);
+
+    expect(store.status('today')).toBe('acked');
+    expect(store.reminder.status).toBe('scheduled');
+    expect(store.doc('tomorrow')).toEqual({ status: 'scheduled', recurrence: DAILY });
+  });
+
+  // Recurring keeps the earlier rule exactly: an earlier occurrence left sent still holds it open.
+  it('does not ack the other delivered occurrences of a recurring reminder', async () => {
+    const store = fakeReminderTree({ status: 'scheduled', recurrence: BIRTHDAY }, [
+      { id: 'last-year', data: { status: 'sent', recurrence: BIRTHDAY } },
+      { id: 'this-year', data: { status: 'sent', recurrence: BIRTHDAY } },
+    ]);
+
+    await store.service.ackNotification(store.ref('this-year') as never, USER, ACK_NOW);
+
+    expect(store.status('last-year')).toBe('sent');
+    expect(store.reminder.status).toBe('scheduled');
+  });
+
+  it('treats a reminder as recurring when only its notifications carry the rule', async () => {
+    const store = fakeReminderTree({ status: 'scheduled' }, [
+      { id: 'today', data: { status: 'sent', recurrence: BIRTHDAY } },
+      { id: 'next', data: { status: 'scheduled', recurrence: BIRTHDAY } },
+    ]);
+
+    await store.service.ackNotification(store.ref('today') as never, USER, ACK_NOW);
+
+    expect(store.status('next')).toBe('scheduled');
+    expect(store.reminder.status).toBe('scheduled');
   });
 });

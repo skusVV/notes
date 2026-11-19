@@ -1,8 +1,8 @@
 ---
 id: 0003-reminder-lost-on-send-failure
-state: IN-TESTING
+state: BLOCKED
 severity: high
-attempt: 0
+attempt: 1
 max_attempts: 3
 branch: fix/0003-reminder-lost-on-send-failure
 acceptance:
@@ -16,7 +16,28 @@ acceptance:
     assert: "npm test includes a passing test: a recurring notification whose first send fails and second succeeds ends with exactly one next-occurrence notification in status 'scheduled'"
   - id: delivery-unchanged
     assert: "With X-Test-Now=2026-12-01T09:00:00+02:00, from user 900000006 POST 'Remind me today at 14:00 to water the plants'; POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-12-01T13:45:00+02:00 and the reflected replies contain exactly one string starting with 'Нагадування:' that contains 'water the plants'; a second POST /sweep at the same X-Test-Now reflects no such string; '/export' from 900000006 shows that notification with status 'sent'"
-failures: []
+failures:
+  - attempt: 0
+    stage: deploy
+    detail: >-
+      Deploy not observable - build environment, not an implementation defect; needs the owner. The
+      testing trigger's Cloud Build for 9578dae (fix/0003 + lane commit, 2026-11-19 14:06:55-14:08:06 UTC)
+      FAILED in step 'deploy' with "(gcloud.functions.deploy) Invalid value for [--runtime]: nodejs20 is
+      not a supported runtime on GCF 2nd gen" (read from the GitHub check run). cloudbuild.yaml line 12
+      '--runtime=nodejs20' is identical on main and origin/main, so the production trigger will fail the
+      same way on the next push to main (last green builds: test fe3e0a3, prod 2840c1d, both 2026-11-02).
+      The test function kept serving fe3e0a3: 900000006's /export never gained the 'allDay' key that every
+      fix/0003 export carries (50 probes 14:07-14:32 UTC, re-probed 16:59 UTC; /version is 'notes-bot
+      1.0.0' on both and cannot tell them apart). So health and delivery-unchanged are NOT VERIFIED (GET /
+      did answer 200 {"status":"ok"}, but from the old revision); delivery-unchanged was not run. Unit
+      criteria checked locally on 67c5958: npm test 292/292, build and tsc clean; repro-fixed, gives-up and
+      recurrence-once PASS, and the 11 new tests fail on b7719a0 (sweeper repro: expected 'sent' to be
+      'scheduled'). Changing cloudbuild.yaml is outside this bug's Fix scope. Owner action: move --runtime
+      to a supported Node runtime (and check package.json engines), get a green testing build, then re-run
+      verification from IMPLEMENTED. Security pass ATTENTION, not FAIL (E/F: the unchanged 'Failed to
+      deliver notification' log passes the whole AxiosError to Nest's logger, which prints the bot token
+      from baseURL and the reminder text from the request body; pre-existing, but the retry makes it up to
+      3 times per notification - worth its own bug).
 ---
 
 # BUG-0003 - A reminder whose Telegram send fails is never delivered

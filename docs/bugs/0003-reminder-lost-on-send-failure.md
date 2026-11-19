@@ -1,8 +1,8 @@
 ---
 id: 0003-reminder-lost-on-send-failure
-state: BLOCKED
+state: IMPLEMENTED
 severity: high
-attempt: 1
+attempt: 0
 max_attempts: 3
 branch: fix/0003-reminder-lost-on-send-failure
 acceptance:

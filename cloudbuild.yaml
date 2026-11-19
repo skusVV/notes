@@ -9,7 +9,7 @@ steps:
       - deploy
       - ${_FUNCTION_NAME}
       - --gen2
-      - --runtime=nodejs20
+      - --runtime=nodejs24
       - --region=${_REGION}
       - --source=.
       - --entry-point=telegramBot

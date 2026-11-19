@@ -674,9 +674,10 @@ time means a missed appointment); acknowledge symptoms and notes with a quiet ti
 person at most once per message. Worth deciding deliberately rather than discovering it is annoying
 in week three.
 
-**[deadline, unrelated] `nodejs20` cannot be deployed after 2026-10-30.** Still outstanding from the
-voice work. It will silently break auto-deploy - a push that simply stops producing a new revision.
-Worth clearing before phase 0.
+**[resolved 2026-11-19] `nodejs20` could not be deployed after 2026-10-30.** It did break auto-deploy
+exactly as predicted: every build from 2026-11-02 on failed with "nodejs20 is not a supported runtime
+on GCF 2nd gen". `cloudbuild.yaml` now uses `--runtime=nodejs24`. `garmin-ingester` still builds on
+`node:20-slim` (a container, so it still deploys, but Node 20 is past end of life).
 
 ---
 

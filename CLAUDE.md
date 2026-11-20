@@ -186,9 +186,10 @@ try/catch so one failing section never drops the others, capped at 15 lines with
 log a section's lines or the digest text - user id, section id and line counts only. The runner is
 provided by `IngestModule`, not `DigestModule`, because it needs `TelegramService` and
 `TelegramModule` already imports `DigestModule` for `/digest on|off` and the `digest` key in
-`/export`. The reminders section shows a reminder until it is done: `ackNotification` sets the
-reminder itself `acked` once none of its notifications is `scheduled` or `sent` (so a recurring one,
-whose next occurrence is already armed, never closes), and a recurring reminder with no stated clock
+`/export`. The reminders section shows a reminder until it is done: `ackNotification` closes a
+one-off reminder outright (BUG-0004: it acks the other delivered nudges and cancels the unfired ones,
+in one transaction), while a recurring one closes only once none of its notifications is `scheduled`
+or `sent` (so, with its next occurrence already armed, it never closes), and a recurring reminder with no stated clock
 time is stored `allDay: true` (set by code from `hasTimeOfDay === false`, never inferred) and listed
 first, title only.
 

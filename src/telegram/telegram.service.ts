@@ -334,11 +334,15 @@ export class TelegramService {
   // `actorAsks` is the same trust boundary again: the test function passes one so the reflected
   // response can report the actor question this update produced, which is the only way a test can
   // reply to it. Production passes nothing.
+  //
+  // `ingested` is set only by `handleIngestedText`: the message was never in the Telegram chat and
+  // its message_id is made up, so nothing may be sent as a reply to it.
   async handleUpdate(
     update: TelegramUpdate,
     sink?: string[],
     nowOverride?: string,
     actorAsks?: ActorQuestion[],
+    ingested = false,
   ): Promise<void> {
     // A delivery button tap arrives as its own update kind, so it is handled before the
     // message branches. It rides the same webhook, so it is already behind the secret check.
@@ -409,7 +413,7 @@ export class TelegramService {
         now,
         undefined,
         sink,
-        message.message_id,
+        ingested ? undefined : message.message_id,
         actorAsks,
       );
     }
@@ -424,13 +428,18 @@ export class TelegramService {
    * `ALLOWED_USERS` by the ingest controller.
    *
    * `update_id` and `message_id` come from the real clock - unique per request. `update_id` is
-   * only ever logged, so a collision with a real Telegram id breaks nothing.
+   * only ever logged, so a collision with a real Telegram id breaks nothing. The update is flagged
+   * as ingested so no reply is ever sent *to* that made-up `message_id`: Telegram rejects a reply to
+   * a message it never saw, which used to drop the actor question.
+   *
+   * `actorAsks` is the reflect-mode collector, as for `handleUpdate`.
    */
   async handleIngestedText(
     userId: number,
     text: string,
     sink?: string[],
     nowOverride?: string,
+    actorAsks?: ActorQuestion[],
   ): Promise<void> {
     const stamp = this.clock.now().getTime();
     await this.handleUpdate(
@@ -445,6 +454,8 @@ export class TelegramService {
       },
       sink,
       nowOverride,
+      actorAsks,
+      true,
     );
   }
 
@@ -876,6 +887,9 @@ export class TelegramService {
   /**
    * The branch point. Classifies the message, then dispatches each intent to its own handler.
    * A classification failure degrades to `other` rather than blocking the reply.
+   *
+   * `replyToMessageId` is the user's own Telegram message, which the actor question replies to; it
+   * is undefined for ingested text, which has no message in the chat, so the question goes plain.
    */
   private async route(
     chatId: number,
@@ -885,7 +899,7 @@ export class TelegramService {
     now: Date,
     prefix?: string,
     sink?: string[],
-    messageId?: number,
+    replyToMessageId?: number,
     actorAsks?: ActorQuestion[],
   ): Promise<void> {
     if (!this.classifier.available) {
@@ -997,10 +1011,10 @@ export class TelegramService {
 
     // Strictly after the reminder's own reply: asking about a person is a follow-up, and a failure
     // in it must never delay or replace the confirmation the user is waiting for.
-    if (hasReminder && from && messageId !== undefined) {
+    if (hasReminder && from) {
       await this.askAboutNewMention(
         chatId,
-        messageId,
+        replyToMessageId,
         from.id,
         result.mentions,
         now,
@@ -1052,8 +1066,9 @@ export class TelegramService {
   /**
    * Asks about the first mention this user neither knows nor has declined - at most one question
    * per message, however many new names it carried. The question is sent as a native Telegram reply
-   * to the user's *own* message, so the answer arrives with a `reply_to_message` the pending
-   * question can be matched by, and the open question is recorded in Firestore rather than in
+   * to the user's *own* message when there is one (`replyToMessageId`); ingested text has none, so
+   * its question is a plain message. Either way the answer is matched by its `reply_to_message`
+   * against the *bot's question* id, and the open question is recorded in Firestore rather than in
    * memory: the instance that asks is not necessarily the one that reads the answer.
    *
    * Everything here is best effort. A failure is logged and dropped, never surfaced - the reminder
@@ -1061,7 +1076,7 @@ export class TelegramService {
    */
   private async askAboutNewMention(
     chatId: number,
-    messageId: number,
+    replyToMessageId: number | undefined,
     userId: number,
     mentions: string[],
     now: Date,
@@ -1086,7 +1101,7 @@ export class TelegramService {
         `I do not know ${mention} yet. Who is that? Tell me anything worth remembering, or say "no" and I will stop asking.`,
         sink,
         undefined,
-        messageId,
+        replyToMessageId,
       );
       if (questionMessageId === undefined) {
         return;

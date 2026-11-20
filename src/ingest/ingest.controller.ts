@@ -11,7 +11,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ClockService } from '../clock/clock.service';
 import { DigestRunnerService, DigestSkipReason } from '../digest/digest-runner.service';
-import { TelegramService } from '../telegram/telegram.service';
+import { ActorQuestion, TelegramService } from '../telegram/telegram.service';
 import { IngestGuard } from './ingest.guard';
 
 /** Longest text `/ingest/message` accepts, after trimming. A dictated thought is far shorter. */
@@ -73,7 +73,7 @@ export class IngestController {
     @Headers('x-ingest-secret') secret: string | undefined,
     @Headers('x-test-now') testNow: string | undefined,
     @Body() body: unknown,
-  ): Promise<{ ok: boolean; replies?: string[] }> {
+  ): Promise<{ ok: boolean; replies?: string[]; actorQuestion?: ActorQuestion }> {
     this.guard.assertIngestSecret(secret);
 
     const fields = body as { text?: unknown; userId?: unknown } | null | undefined;
@@ -98,15 +98,25 @@ export class IngestController {
     const reflect = this.config.get<string>('TEST_REFLECT_REPLY')?.trim() === 'true';
     const sink: string[] | undefined = reflect ? [] : undefined;
     const nowOverride = reflect ? testNow?.trim() || undefined : undefined;
+    // Same trust boundary again, as on the webhook: the actor question this text asked, if any, so a
+    // test can reply to it by message id. There is at most one per message.
+    const actorAsks: ActorQuestion[] | undefined = reflect ? [] : undefined;
 
     try {
-      await this.telegram.handleIngestedText(userId, text, sink, nowOverride);
+      await this.telegram.handleIngestedText(userId, text, sink, nowOverride, actorAsks);
     } catch (error) {
       // The user id only - never the text, which may be health data.
       this.logger.error(`Failed to handle ingested message for user ${userId}`, error as Error);
     }
 
-    return sink ? { ok: true, replies: sink } : { ok: true };
+    if (!sink) {
+      return { ok: true };
+    }
+
+    // The key is absent, not null, when no question was asked, matching the webhook's response.
+    return actorAsks?.length
+      ? { ok: true, replies: sink, actorQuestion: actorAsks[0] }
+      : { ok: true, replies: sink };
   }
 
   /**

@@ -215,7 +215,7 @@ describe('POST /ingest/message validation (400)', () => {
     expect(await made.controller.message(SECRET, undefined, { userId: U1, text })).toEqual({
       ok: true,
     });
-    expect(made.ingested).toHaveBeenCalledWith(U1, text, undefined, undefined);
+    expect(made.ingested).toHaveBeenCalledWith(U1, text, undefined, undefined, undefined);
   });
 
   it('reports invalid_text, not invalid_user, when both are bad', async () => {
@@ -296,6 +296,7 @@ describe('POST /ingest/message handling (200)', () => {
       'Нотатка: код від сейфа 7733',
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -308,7 +309,13 @@ describe('POST /ingest/message handling (200)', () => {
       text: 'Нотатка: код від шафи 9955',
     });
 
-    expect(made.ingested).toHaveBeenCalledWith(U2, 'Нотатка: код від шафи 9955', undefined, undefined);
+    expect(made.ingested).toHaveBeenCalledWith(
+      U2,
+      'Нотатка: код від шафи 9955',
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 
   // acceptance: ingest-note-per-user

@@ -1,8 +1,8 @@
 ---
 id: 0002-ingest-actor-question-undeliverable
-state: IN-TESTING
+state: BLOCKED
 severity: medium
-attempt: 0
+attempt: 1
 max_attempts: 3
 branch: fix/0002-ingest-actor-question-undeliverable
 acceptance:
@@ -18,7 +18,30 @@ acceptance:
     assert: "npm test passes and includes a regression test, failing on the pre-fix code, asserting that the actor question for an ingested message is sent with no reply_to_message_id, while for a webhook message it is still sent with reply_to_message_id equal to the user's message_id"
   - id: no-regression-ingest
     assert: "POST /ingest/message with {\"userId\":900000004,\"text\":\"/version\"} returns 200 with a reply starting 'notes-bot '; with {\"userId\":900000004,\"text\":\"   \"} it returns 400"
-failures: []
+failures:
+  - attempt: 0
+    stage: verification
+    detail: >-
+      Criterion conflict on wording, not an implementation defect - needs the owner. testing = 9da8dc1 (fix +
+      lane commit) was proven live when the reflect-mode probe POST /ingest/message {userId 900000006, "Remind
+      me tomorrow at 10:00 to call Ustymena"} went from no actorQuestion (08:55:43, 08:56:20 UTC) to
+      actorQuestion {mention "Ustymena", questionMessageId 1000000003} (08:56:53 UTC). PASS: health (GET / 200
+      {"status":"ok"}), reply-to-only-for-real-messages (npm test 302/302; on tests-only 9ca1836 the two
+      ingest-half tests in telegram.actors.spec.ts and the reflect test in ingest.controller.spec.ts fail on
+      their assertions, the webhook-half test passes on both), no-regression-ingest (/version -> 200
+      {"ok":true,"replies":["notes-bot 1.0.0"]}; "   " -> 400 {"ok":false,"error":"invalid_text"}). FAIL as
+      written, wording only: the classifier returned the Latin-spelled names as Ukrainian Cyrillic mentions.
+      repro-fixed -> 200 {"ok":true,"replies":["Нагадування збережено: Call Zinovia\nЗавтра о 10:00","I do not
+      know Зіновія yet. ..."],"actorQuestion":{"mention":"Зіновія","questionMessageId":1000000005}} - shape,
+      reminder and numeric id hold, mention is 'Зіновія' not 'Zinovia'. answer-works -> the reply-to-1000000005
+      answer 'my aunt from Lviv' got "Noted, I will remember that." and /export shows actor reDGvM9M8BfcRJc1MUJT
+      {name "Зіновія", notes "my aunt from Lviv"} - stored as asked, name not 'Zinovia'. webhook-unchanged ->
+      200 actorQuestion {"mention":"Ярослава","questionMessageId":1000000012}, not 'Yaroslava'. The mention
+      spelling comes from the classifier (its BASE DICTIONARY FORM prompt with Ukrainian examples), which this
+      diff does not touch and which the Fix scope puts out of bounds; the unchanged webhook path renders it the
+      same way, so rework cannot change it. Owner decision: amend the three criteria to accept the mention
+      the classifier returns (e.g. 'Zinovia' or 'Зіновія'), or use names without a familiar Ukrainian form.
+      A re-run needs fresh names for 900000004: 'Зіновія' is now a known actor there. Security pass PASS.
 ---
 
 # BUG-0002 - "Who is this?" question from `/ingest/message` cannot reach the owner

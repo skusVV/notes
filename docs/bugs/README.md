@@ -51,5 +51,5 @@ loses nothing; `low` is cosmetic or only affects tests and tooling.
 | [0001-classifier-reminder-tests-stale](0001-classifier-reminder-tests-stale.md) | DONE | low | Two classifier reminder tests fail because their fixtures lack the new `evidence` field. |
 | [0002-ingest-actor-question-undeliverable](0002-ingest-actor-question-undeliverable.md) | READY | medium | A "who is this?" question raised by text sent through `/ingest/message` cannot reach the owner. |
 | [0003-reminder-lost-on-send-failure](0003-reminder-lost-on-send-failure.md) | DONE | high | A reminder whose Telegram send fails is marked `sent` and never retried. |
-| [0004-done-does-not-close-after-ignored-nudge](0004-done-does-not-close-after-ignored-nudge.md) | READY | medium | Tapping Done does not close a reminder if an earlier nudge was left untapped. |
+| [0004-done-does-not-close-after-ignored-nudge](0004-done-does-not-close-after-ignored-nudge.md) | DONE | medium | Tapping Done does not close a reminder if an earlier nudge was left untapped. |
 | [0005-bot-token-in-error-logs](0005-bot-token-in-error-logs.md) | OPEN | high | A failed Telegram call logs the bot token and the message text. |

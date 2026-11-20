@@ -9,11 +9,11 @@ acceptance:
   - id: health
     assert: "GET / returns HTTP 200 with body {\"status\":\"ok\"}"
   - id: repro-fixed
-    assert: "POST /ingest/message (valid X-Ingest-Secret) with body {\"userId\":900000004,\"text\":\"Remind me tomorrow at 10:00 to call Zinovia\"} and X-Test-Now=2026-12-01T09:00:00+02:00 returns HTTP 200 with ok == true, a replies array confirming the reminder, and an actorQuestion object whose mention is 'Zinovia' and whose questionMessageId is a number"
+    assert: "POST /ingest/message (valid X-Ingest-Secret) with body {\"userId\":900000004,\"text\":\"Remind me tomorrow at 10:00 to call Zinovia\"} and X-Test-Now=2026-12-01T09:00:00+02:00 returns HTTP 200 with ok == true, a replies array confirming the reminder, and an actorQuestion object whose mention is 'Zinovia' or its Cyrillic form 'Зіновія' (the classifier may normalise a name to Ukrainian) and whose questionMessageId is a number"
   - id: answer-works
-    assert: "Continuing from repro-fixed: POST a webhook update (valid secret) from user 900000004 in chat 900000004 with text 'my aunt from Lviv' and reply_to_message.message_id equal to that questionMessageId; a '/export' from 900000004 then shows an actor named 'Zinovia' whose notes equal 'my aunt from Lviv'"
+    assert: "Continuing from repro-fixed: POST a webhook update (valid secret) from user 900000004 in chat 900000004 with text 'my aunt from Lviv' and reply_to_message.message_id equal to that questionMessageId; a '/export' from 900000004 then shows an actor whose name equals that actorQuestion mention and whose notes equal 'my aunt from Lviv'"
   - id: webhook-unchanged
-    assert: "POST a webhook update from user 900000005 with text 'Remind me tomorrow at 10:00 to call Yaroslava' and X-Test-Now=2026-12-01T09:00:00+02:00; the response has an actorQuestion with mention 'Yaroslava', exactly as before the fix"
+    assert: "POST a webhook update from user 900000005 with text 'Remind me tomorrow at 10:00 to call Yaroslava' and X-Test-Now=2026-12-01T09:00:00+02:00; the response has an actorQuestion with mention 'Yaroslava' or 'Ярослава', exactly as before the fix"
   - id: reply-to-only-for-real-messages
     assert: "npm test passes and includes a regression test, failing on the pre-fix code, asserting that the actor question for an ingested message is sent with no reply_to_message_id, while for a webhook message it is still sent with reply_to_message_id equal to the user's message_id"
   - id: no-regression-ingest

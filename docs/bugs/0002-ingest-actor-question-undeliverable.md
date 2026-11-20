@@ -1,8 +1,8 @@
 ---
 id: 0002-ingest-actor-question-undeliverable
-state: BLOCKED
+state: VERIFIED
 severity: medium
-attempt: 1
+attempt: 0
 max_attempts: 3
 branch: fix/0002-ingest-actor-question-undeliverable
 acceptance:
@@ -45,6 +45,14 @@ failures:
 ---
 
 # BUG-0002 - "Who is this?" question from `/ingest/message` cannot reach the owner
+
+> **VERIFIED 2026-11-20** (spec-verifier) on telegram-echo-bot-test, live revision 9da8dc1, proven live
+> at 08:56:53 UTC when the reflect-mode ingest probe first carried an `actorQuestion`. All 6 criteria
+> pass; security pass PASS. `repro-fixed`, `answer-works` and `webhook-unchanged` were re-judged against
+> the amended criteria (f18c046) from the evidence recorded on 2026-11-20 at 08:57 UTC on that revision,
+> with no redeploy (src/ and test/ byte-identical to 9da8dc1): ingest mention 'Зіновія', questionMessageId
+> 1000000005; actor reDGvM9M8BfcRJc1MUJT {name 'Зіновія', notes 'my aunt from Lviv'}; webhook mention
+> 'Ярослава'. The `failures` entry is history (criterion wording), not an implementation failure.
 
 > **OPEN.** Found 2026-11-01 by the spec-implementer for 0013 and confirmed in the verifier's notes.
 > **READY 2026-11-16** (owner). Root cause confirmed by reading the code (see below). Unique names

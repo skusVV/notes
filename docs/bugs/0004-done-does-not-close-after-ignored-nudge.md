@@ -1,6 +1,6 @@
 ---
 id: 0004-done-does-not-close-after-ignored-nudge
-state: IN-TESTING
+state: VERIFIED
 severity: medium
 attempt: 0
 max_attempts: 3
@@ -20,6 +20,13 @@ failures: []
 ---
 
 # BUG-0004 - Done does not close a reminder if an earlier nudge was left untapped
+
+> **VERIFIED 2026-11-20** (spec-verifier) on telegram-echo-bot-test, live revision feac0fa
+> (fix/0004 + lane commit). Deploy proven live at 05:12:31 UTC when probe user 900000004's unfired
+> nudge jOzcHa0AgYEJNS5QYtmc flipped from `scheduled` to `cancelled` on a re-tapped Done (it stayed
+> `scheduled` on the old revision at 05:09:53 UTC). All 5 criteria pass; security pass PASS.
+> Reminders used: 900000001 5wgR4ZZl80oQFmCMKN2X, 900000002 NSJk7RENZ0P7Jno4BahC,
+> 900000003 aSBQuk3b1eyFe3PJ4J5l.
 
 > **READY 2026-11-16** (owner). Found the same day in a housekeeping review, by reading the code.
 > Decision: Done on a non-recurring reminder closes it, acks its other delivered nudges and cancels

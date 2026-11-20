@@ -377,6 +377,49 @@ describe('POST /ingest/message handling (200)', () => {
   });
 });
 
+// BUG-0002: in reflect mode the ingest response carries the actor question, as the webhook's does, so
+// a test can answer it. Absent - not null - when no question was asked.
+describe('POST /ingest/message actorQuestion (reflect mode)', () => {
+  it('returns the first actor question the ingested text produced', async () => {
+    const made = makeController({ TEST_REFLECT_REPLY: 'true' });
+    made.ingested.mockImplementation(async (_userId, _text, sink, _now, actorAsks) => {
+      sink?.push('Reminder set');
+      actorAsks?.push({ mention: 'Zinovia', questionMessageId: 5150 });
+    });
+
+    const body = await made.controller.message(SECRET, undefined, {
+      userId: U1,
+      text: 'Remind me to call Zinovia',
+    });
+
+    expect(body).toEqual({
+      ok: true,
+      replies: ['Reminder set'],
+      actorQuestion: { mention: 'Zinovia', questionMessageId: 5150 },
+    });
+  });
+
+  it('omits actorQuestion when no question was asked', async () => {
+    const made = makeController({ TEST_REFLECT_REPLY: 'true' });
+    made.ingested.mockImplementation(async (_userId, _text, sink) => {
+      sink?.push('Saved');
+    });
+
+    const body = await made.controller.message(SECRET, undefined, { userId: U1, text: 'hi' });
+
+    expect(body).toEqual({ ok: true, replies: ['Saved'] });
+  });
+
+  it('passes no actorAsks collector in production', async () => {
+    const made = makeController();
+
+    expect(await made.controller.message(SECRET, undefined, { userId: U1, text: 'hi' })).toEqual({
+      ok: true,
+    });
+    expect(made.ingested.mock.calls[0][4]).toBeUndefined();
+  });
+});
+
 describe('TelegramService.handleIngestedText', () => {
   it('builds a private-chat update from the given user and feeds it to handleUpdate', async () => {
     const service = makeService();

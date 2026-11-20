@@ -196,6 +196,71 @@ describe('TelegramService actor capture', () => {
   });
 });
 
+// BUG-0002: an ingested message has no real Telegram message behind it - its message_id is made up -
+// so the question must not be sent as a reply to it. Telegram rejects a reply to a message it never
+// saw, and in production (no sink) that error used to drop the question silently.
+describe('TelegramService actor question reply target (BUG-0002)', () => {
+  const sentBodies = (): Record<string, unknown>[] =>
+    mockPost.mock.calls.map(([, body]) => body as Record<string, unknown>);
+  const questionBody = (): Record<string, unknown> | undefined =>
+    sentBodies().find((body) => String(body.text).startsWith('I do not know'));
+
+  beforeEach(() => {
+    mockPost.mockReset();
+    // Production-like Telegram: a reply to an unknown message is rejected, anything else is sent.
+    mockPost.mockImplementation((_path: string, body: Record<string, unknown>) =>
+      body.reply_to_message_id !== undefined && body.reply_to_message_id !== 77
+        ? Promise.reject(new Error('400 Bad Request: message to be replied not found'))
+        : Promise.resolve({ data: { ok: true, result: { message_id: 5150 } } }),
+    );
+  });
+
+  // acceptance: reply-to-only-for-real-messages (the ingest half)
+  it('sends an ingested message\'s question with no reply_to_message_id and records it', async () => {
+    const { service, store } = makeService(reminderResult(['Zinovia']));
+    const replies: string[] = [];
+    const asks: ActorQuestion[] = [];
+
+    await service.handleIngestedText(USER, 'Remind me to call Zinovia', replies, NOW, asks);
+
+    const question = questionBody();
+    expect(question).toBeDefined();
+    expect(question).not.toHaveProperty('reply_to_message_id');
+    expect(question?.chat_id).toBe(USER);
+    expect(question).not.toHaveProperty('parse_mode');
+    expect(asks).toEqual([{ mention: 'Zinovia', questionMessageId: 5150 }]);
+    expect(store.docs.get(`users/${USER}/pending/${USER}`)).toMatchObject({
+      kind: 'actor_confirm',
+      mention: 'Zinovia',
+      questionMessageId: 5150,
+    });
+  });
+
+  // Production passes no sink, so a rejected send would throw - the question must still arrive.
+  it('delivers and records an ingested message\'s question in production (no sink)', async () => {
+    const { service, store } = makeService(reminderResult(['Zinovia']));
+
+    await service.handleIngestedText(USER, 'Remind me to call Zinovia');
+
+    expect(questionBody()).not.toHaveProperty('reply_to_message_id');
+    expect(store.docs.get(`users/${USER}/pending/${USER}`)).toMatchObject({
+      mention: 'Zinovia',
+      questionMessageId: 5150,
+    });
+  });
+
+  // acceptance: reply-to-only-for-real-messages (the webhook half - unchanged)
+  it('still sends a webhook message\'s question as a reply to the user\'s message_id', async () => {
+    const { service } = makeService(reminderResult(['Yaroslava']));
+    const asks: ActorQuestion[] = [];
+
+    await service.handleUpdate(textUpdate('Remind me to call Yaroslava', 77), [], NOW, asks);
+
+    expect(questionBody()?.reply_to_message_id).toBe(77);
+    expect(asks).toEqual([{ mention: 'Yaroslava', questionMessageId: 5150 }]);
+  });
+});
+
 describe('TelegramService actor answers', () => {
   beforeEach(() => {
     mockPost.mockReset();

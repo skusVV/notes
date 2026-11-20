@@ -1,6 +1,6 @@
 ---
 id: 0002-ingest-actor-question-undeliverable
-state: VERIFIED
+state: DONE
 severity: medium
 attempt: 0
 max_attempts: 3

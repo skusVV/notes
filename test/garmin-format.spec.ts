@@ -84,6 +84,17 @@ describe('activityLabel', () => {
     expect(activityLabel('breathwork')).toBe('Дихання');
   });
 
+  it('maps the variants found in real data', () => {
+    expect(activityLabel('lap_swimming')).toBe('Плавання');
+    expect(activityLabel('open_water_swimming')).toBe('Плавання');
+    expect(activityLabel('road_biking')).toBe('Велосипед');
+    expect(activityLabel('indoor_cycling')).toBe('Велосипед');
+    expect(activityLabel('virtual_ride')).toBe('Велосипед');
+    expect(activityLabel('treadmill_running')).toBe('Біг');
+    expect(activityLabel('kayaking_v2')).toBe('Каяк');
+    expect(activityLabel('other')).toBe('Тренування');
+  });
+
   it('never shows a raw key: unknown or missing is Тренування', () => {
     expect(activityLabel('pickleball')).toBe('Тренування');
     expect(activityLabel(null)).toBe('Тренування');

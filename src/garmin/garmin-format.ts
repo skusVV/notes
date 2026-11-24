@@ -102,6 +102,15 @@ const ACTIVITY_LABELS: Readonly<Record<string, string>> = {
   swimming: 'Плавання',
   yoga: 'Йога',
   breathwork: 'Дихання',
+  // Variants seen in the owner's real data (2026-11-24): pool and open-water swims, indoor and
+  // virtual rides, kayaking.
+  lap_swimming: 'Плавання',
+  open_water_swimming: 'Плавання',
+  road_biking: 'Велосипед',
+  indoor_cycling: 'Велосипед',
+  virtual_ride: 'Велосипед',
+  treadmill_running: 'Біг',
+  kayaking_v2: 'Каяк',
 };
 
 /** The label for an activity type. Unknown or missing is `Тренування` - the raw key never shows. */

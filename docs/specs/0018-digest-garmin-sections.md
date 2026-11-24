@@ -148,7 +148,7 @@ failures: []
   - Колір - не оцінка здоров'я, це лише "у межах/поза межами базової лінії Garmin".
 - **`formatDuration(sec)`** - `45 хв`, `1 год 5 хв`, `2 год`; секунди відкидаються; `<60 с` - `<1 хв`.
 - **`activityLabel(typeKey)`** - таблиця: `running` Біг, `walking` Ходьба, `cycling` Велосипед,
-  `strength_training` Силова, `hiking` Похід, `swimming` Плавання, `yoga` Йога, `breathwork` Дихання.
+  `strength_training` Силова, `hiking` Похід, `swimming` Плавання, `yoga` Йога, `breathwork` Дихання; також варіанти з реальних даних (2026-11-24): `lap_swimming`, `open_water_swimming` Плавання, `road_biking`, `indoor_cycling`, `virtual_ride` Велосипед, `treadmill_running` Біг, `kayaking_v2` Каяк. Ключі зберігаються як `activities/{id}.type`, тривалість як `durationSec`.
   Невідомий або `null` - `Тренування`. Сирий `typeKey` не показується ніколи.
 - **`sleepQualifierLabel(key)`** - `EXCELLENT` відмінно, `GOOD` добре, `FAIR` посередньо, `POOR` погано;
   регістр не важливий; решта - `null` (позначку не показуємо). Це переклад слова самого Garmin, а не

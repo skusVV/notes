@@ -16,8 +16,9 @@ failures: []
 
 > **Оновлення 2026-11-02 ([0022](0022-morning-run.md)):** розклад, ім'я джоби й директорія змінено.
 > Тепер це **одна ранкова джоба `morning-run`** (директорія `morning-run/`, Scheduler `0 7 * * *`): вона
-> тягне Garmin до 5 спроб, а потім просить бота надіслати ранковий звіт. Усі згадки `garmin-ingester`,
-> "once a day at 07:00 with no retries of the run" і Console-кроків 4-5 нижче читати з цією поправкою.
+> тягне Garmin до 5 спроб, а потім просить бота надіслати ранковий звіт. Шляхи нижче вже вказують на
+> `morning-run/`; "once a day at 07:00 with no retries of the run" і Console-кроки 4-5 нижче читати з
+> цією поправкою (актуальні кроки - у [morning-run/README.md](../../morning-run/README.md)).
 > Контракти даних, алерти й інваріанти цього спека лишаються чинними.
 
 > **Delivery track: manual, NOT `/implement-spec`.** Every other spec here is verified over HTTP
@@ -162,7 +163,7 @@ out of the bot's deploy. Written in **TypeScript on Node** to match the repo: th
 plain REST with a bearer token, so no Garmin-specific library is needed (the earlier Python
 requirement came only from the unofficial login library). The implementer may touch only these:
 
-- `garmin-ingester/` (new). Files:
+- `morning-run/` (new; was `garmin-ingester/` until [0022](0022-morning-run.md)). Files:
   - `src/ingester.ts` - the job entrypoint: resolve the date window, exchange the key, pull, write,
     alert, exit.
   - `src/garmin-client.ts` - thin wrapper over `fetch`: `getAccessToken(apiKey)` and typed getters
@@ -177,7 +178,7 @@ requirement came only from the unofficial login library). The implementer may to
   - `cloudbuild.yaml` - its **own** deploy config for a **separate** Cloud Build trigger.
   - `README.md` - run / deploy / key-renewal instructions as Console click-paths, per
     [../../CLAUDE.local.md](../../CLAUDE.local.md).
-- `.gcloudignore` (repo root, new or edited) - exclude `garmin-ingester/` so the bot's `--source=.`
+- `.gcloudignore` (repo root, new or edited) - exclude `morning-run/` so the bot's `--source=.`
   upload in [../../cloudbuild.yaml](../../cloudbuild.yaml) never ships the ingester.
 
 There is **no re-auth tool**: nothing is logged into, so there is nothing to script. Renewing the key
@@ -343,7 +344,7 @@ embedded); only *when* and *how often* they are sent is asserted.
 - **Data minimization.** Store only the curated fields in Contracts.
 - **Personal use only.** Single owner, own data; do not widen this to other people's accounts - it
   would breach the Personal API terms and the single-owner design.
-- **Does not touch the bot's deploy.** `.gcloudignore` excludes `garmin-ingester/`, so a bad file
+- **Does not touch the bot's deploy.** `.gcloudignore` excludes `morning-run/`, so a bad file
   here can never fail the bot's Cloud Build.
 
 ## Acceptance criteria (manual - the pipeline cannot run these)
@@ -397,11 +398,11 @@ No local `gcloud` writes are needed.
    `GARMIN_API_KEY` and `TELEGRAM_BOT_TOKEN`, and **Cloud Datastore User** for Firestore. It must
    **not** get any secret-write role.
 4. **Cloud Run -> Jobs -> Deploy** the ingester image (or wire a **separate** Cloud Build trigger on
-   `garmin-ingester/cloudbuild.yaml`, distinct from the bot's trigger). Set env var
+   `morning-run/cloudbuild.yaml`, distinct from the bot's trigger). Set env var
    `GARMIN_KEY_EXPIRES_ON` to the date from step 1.
 5. **Cloud Scheduler -> Create job** -> `0 7 * * *`, `Europe/Kyiv`, target the Cloud Run job's
    execution API, OIDC identity with **Cloud Run Invoker**.
-6. Confirm the bot's own deploy is unaffected: a push that changes only `garmin-ingester/` must not
+6. Confirm the bot's own deploy is unaffected: a push that changes only `morning-run/` must not
    produce a new bot revision.
 
 **Renewing the key (replaces the old re-auth tool).** Only one key can exist at a time, so renewal

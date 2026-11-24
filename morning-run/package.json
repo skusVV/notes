@@ -1,14 +1,14 @@
 {
-  "name": "garmin-ingester",
+  "name": "morning-run",
   "version": "1.0.0",
   "private": true,
-  "description": "Daily Garmin Personal API -> Firestore sync (Cloud Run job). Spec 0010.",
+  "description": "Morning Cloud Run job: Garmin Personal API -> Firestore sync with retries, then the bot's digest. Specs 0010, 0022.",
   "main": "dist/ingester.js",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=24" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/ingester.js",
-    "test": "npm run build && node --test dist/"
+    "test": "npm run build && node --test 'dist/*.test.js'"
   },
   "dependencies": {
     "@google-cloud/firestore": "^8.7.1"

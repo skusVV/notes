@@ -1,0 +1,38 @@
+# Separate Cloud Build trigger for the morning job (specs 0010, 0022). Path filter on the trigger:
+# morning-run/** only, so the bot's own trigger and deploy are never affected.
+# Build config location for the trigger: morning-run/cloudbuild.yaml
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/morning-run:$SHORT_SHA', morning-run]
+  - name: gcr.io/cloud-builders/docker
+    args: [push, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/morning-run:$SHORT_SHA']
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_JOB_NAME}
+      - --region=${_REGION}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/morning-run:$SHORT_SHA
+      # No job-level retry: a second execution would hit Garmin again and call the bot again.
+      - --max-retries=0
+      # Worst case is 4 pauses of 180 s plus the requests (~12-15 min); 1800 s leaves room.
+      - --task-timeout=1800s
+      # --update-*, never --set-*: on a job, --set-env-vars / --set-secrets REPLACE every variable or
+      # secret, which would wipe the ones set once on the job (see below). --update-* only touches
+      # the names listed here. Read-only secrets; the job's service account has no secret-write role.
+      - --update-secrets=GARMIN_API_KEY=GARMIN_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,INGEST_SECRET=${_INGEST_SECRET_NAME}:latest
+      # Set once on the job, never here, so they survive every redeploy: GARMIN_OWNER_USER_ID,
+      # GARMIN_KEY_EXPIRES_ON, BOT_BASE_URL, and the optional MORNING_MAX_ATTEMPTS (default 5) and
+      # MORNING_RETRY_PAUSE_SECONDS (default 180). See morning-run/README.md.
+      - --update-env-vars=GCP_PROJECT=$PROJECT_ID,FIRESTORE_DATABASE=${_FIRESTORE_DATABASE},BACKFILL_DAYS=1
+images: []
+substitutions:
+  _REGION: europe-west1
+  _REPO: cloud-run-source-deploy
+  _JOB_NAME: morning-run
+  _FIRESTORE_DATABASE: (default)
+  _INGEST_SECRET_NAME: INGEST_SECRET
+options:
+  logging: CLOUD_LOGGING_ONLY

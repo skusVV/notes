@@ -21,6 +21,7 @@ src/
   transcription/
     transcription.service.ts   speech to text via Vertex AI (audio/ogg, no transcoding)
 cloudbuild.yaml                what the GitHub push trigger runs
+morning-run/                   separate Cloud Run job: Garmin sync, then the morning digest
 .env.example                   copy to .env for local runs
 ```
 
@@ -387,6 +388,27 @@ version only reaches the function on a new revision.
 The frequency and `REMINDER_SWEEP_INTERVAL_MINUTES` must stay **equal**. The sweep looks ahead one
 interval and delivers everything due before the next tick, so a cron slower than the interval leaves
 reminders late, and a faster one re-runs the same window (harmless, just wasted calls).
+
+### 8b. The morning job (Garmin sync, then the digest)
+
+The morning digest and the Garmin sync are one separate Cloud Run job, `morning-run`, with its own
+trigger and its own [README](morning-run/README.md); the bot's deploy never ships it
+(`.gcloudignore`). Each run syncs Garmin (up to 5 tries, 3 minutes apart, until last night's sleep
+is in) and then always calls `POST <function URL>/ingest/digest`, so **the digest time is this
+job's Cloud Scheduler schedule**. First-time setup, all in the Console:
+
+1. **Secret Manager** -> `INGEST_SECRET` (and `GARMIN_API_KEY`, `TELEGRAM_BOT_TOKEN`) -> **Permissions
+   -> Grant access**: the job's service account, role **Secret Manager Secret Accessor**.
+2. **Cloud Build -> Triggers -> Create**: push to `main`, **Included files filter** `morning-run/**`,
+   configuration **Location** `morning-run/cloudbuild.yaml`. Run it once to create the job.
+3. **Cloud Run -> Jobs -> `morning-run` -> Edit -> Variables & Secrets**: add `GARMIN_OWNER_USER_ID`,
+   `GARMIN_KEY_EXPIRES_ON` and `BOT_BASE_URL` (the prod function URL, no trailing `/`). These live on
+   the job and survive redeploys. Check **Task timeout** `1800` s and **Max retries** `0`.
+4. **Execute** the job once and check its **Logs** and Telegram.
+5. **Cloud Scheduler -> Create job**: `0 7 * * *`, `Europe/Kyiv`, target the `morning-run` job,
+   OIDC identity with **Cloud Run Invoker**.
+
+To move the digest: **Cloud Scheduler -> the job -> Edit -> Frequency**.
 
 ## iPhone: quick note
 

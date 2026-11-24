@@ -56,6 +56,14 @@ the **spec-verifier** (it sets `VERIFIED` or `NEEDS-REWORK`). Loop on `NEEDS-REW
 `attempt <= max_attempts`; stop and relay on `BLOCKED`. Include the difference notes above in each
 prompt.
 
+### 1b. Clean up the test data (after every verifier run, pass or fail)
+The verifier writes reminders, notes, actors and digest state for the synthetic users into the
+`test` Firestore database and cannot clean up itself (it never runs `gcloud`). As soon as it
+returns, whatever the verdict, wipe them so the next run starts clean (owner decision 2026-11-24):
+`T=$(gcloud auth print-access-token) python3 -I scripts/cleanup-test-db.py delete`, then `... list`
+to confirm only the owner's id is left under `users`. It touches only database `test` and only
+ids starting `9000000`. Mention the deleted count in the report.
+
 ### 2. Ship (only after VERIFIED), done by you, not delegated
 1. On `fix/<id>`, run the **update-architecture-docs** skill. Commit `architecture.html` only if it
    changed.
@@ -70,7 +78,7 @@ verdict; what changed in the architecture map; and that `main` was pushed and th
 If the run stopped early, say which stage and why, and that `fix/<id>` is left intact.
 
 ## What this skill never does
-- Run `gcloud`, or deploy by hand.
+- Run `gcloud`, or deploy by hand (except `gcloud auth print-access-token` for the step 1b cleanup).
 - Ship a bug that is not `VERIFIED`.
 - Let a worker agent touch `main`.
 - Widen the fix beyond the bug file's scope.

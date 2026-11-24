@@ -78,6 +78,9 @@ Before returning, confirm all of these:
      `NEEDS-REWORK` (or `BLOCKED` if `attempt > max_attempts`).
    - In every case: clear `.testing-lock`, then `git checkout testing && git reset --hard main && git
      push --force origin testing`.
+   - Data you created on the test function is wiped by the orchestrator right after you return
+     (every synthetic `9000000xx` user in the `test` database, `scripts/cleanup-test-db.py`). So
+     never rely on data from an earlier run, and list in your report which users you wrote to.
 
 ## Output
 

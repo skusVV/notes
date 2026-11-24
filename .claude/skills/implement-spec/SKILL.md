@@ -66,6 +66,14 @@ Read `max_attempts` from the spec (default 3). Repeat this loop:
 The verifier owns the `attempt` counter and the `.testing-lock`; you only read the state it returns
 to decide whether to loop, ship, or stop.
 
+### 1b. Clean up the test data (after every verifier run, pass or fail)
+The verifier writes reminders, notes, actors and digest state for the synthetic users into the
+`test` Firestore database and cannot clean up itself (it never runs `gcloud`). As soon as it
+returns, whatever the verdict, wipe them so the next run starts clean (owner decision 2026-11-24):
+`T=$(gcloud auth print-access-token) python3 -I scripts/cleanup-test-db.py delete`, then `... list`
+to confirm only the owner's id is left under `users`. It touches only database `test` and only
+ids starting `9000000`. Mention the deleted count in the report.
+
 ### 2. Ship (only after VERIFIED)
 Do this yourself in the top-level session - do **not** delegate the merge to an agent.
 
@@ -97,6 +105,7 @@ If the run stopped before shipping, say exactly which stage and why, and note th
 left intact for a manual retry. Never summarize a failure away.
 
 ## What this skill never does
-- Run `gcloud` / any GCP CLI, or deploy by hand - deploys happen only via the push to `main`.
+- Run `gcloud` / any GCP CLI, or deploy by hand - deploys happen only via the push to `main`. The one
+  exception is `gcloud auth print-access-token` for the test-data cleanup in step 1b.
 - Ship a spec that is not `VERIFIED`.
 - Let a worker agent touch `main` - the merge and push are the orchestrator's job alone.

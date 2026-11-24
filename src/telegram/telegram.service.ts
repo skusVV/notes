@@ -218,6 +218,86 @@ function splitForTelegram(text: string): string[] {
   return parts;
 }
 
+/** Telegram's own `description` is short ("Bad Request: chat not found"); this is a backstop. */
+const MAX_ERROR_DESCRIPTION_CHARS = 200;
+
+/** Telegram's `description` from an error body, which the file instance receives as raw bytes. */
+function telegramDescription(data: unknown): string | undefined {
+  let body = data;
+  if (body instanceof ArrayBuffer) {
+    body = Buffer.from(body);
+  }
+  if (Buffer.isBuffer(body)) {
+    try {
+      body = JSON.parse(body.toString('utf8'));
+    } catch {
+      return undefined;
+    }
+  }
+
+  const description = (body as { description?: unknown } | null | undefined)?.description;
+  if (typeof description !== 'string' || !description) {
+    return undefined;
+  }
+  return description.length > MAX_ERROR_DESCRIPTION_CHARS
+    ? `${description.slice(0, MAX_ERROR_DESCRIPTION_CHARS)}…`
+    : description;
+}
+
+/**
+ * BUG-0005: replaces a failed Telegram call's error with a plain `Error` that carries no `config`,
+ * `request`, headers or body. The axios original holds the bot token (in `baseURL` and the request
+ * path) and the outbound text (in `config.data`), and ~30 call sites log errors whole. Only the
+ * HTTP method, the Telegram method name, the status (or axios's code when there was no response)
+ * and Telegram's `description` survive. `response.status` is kept as a bare `{ status }` because the
+ * digest runner reads that path; `code` is kept for timeouts.
+ */
+function sanitizeTelegramError(error: unknown, fileDownload: boolean): Error {
+  const failure = error as
+    | {
+        config?: { method?: unknown; url?: unknown };
+        response?: { status?: unknown; data?: unknown };
+        code?: unknown;
+      }
+    | null
+    | undefined;
+
+  const config = failure?.config;
+  const method = typeof config?.method === 'string' ? config.method.toUpperCase() : 'request';
+  // Bot API paths are a bare method name ("/sendMessage"); anything else is not echoed, so an
+  // absolute URL - which would carry the token - can never reach the message.
+  const path = typeof config?.url === 'string' ? config.url.replace(/^\/+/, '') : '';
+  const botMethod = /^[A-Za-z]+$/.test(path) ? path : 'unknown method';
+  const target = fileDownload ? 'file download' : botMethod;
+  const rawStatus = failure?.response?.status;
+  const status = typeof rawStatus === 'number' ? rawStatus : undefined;
+  const code = typeof failure?.code === 'string' ? failure.code : undefined;
+  const description =
+    status !== undefined ? telegramDescription(failure?.response?.data) : undefined;
+
+  const outcome =
+    status !== undefined
+      ? `HTTP ${status}${description ? ` - ${description}` : ''}`
+      : (code ?? 'no response');
+  const sanitized = new Error(`Telegram ${method} ${target} failed: ${outcome}`);
+  return Object.assign(
+    sanitized,
+    status !== undefined ? { response: { status } } : {},
+    code !== undefined ? { code } : {},
+  );
+}
+
+/**
+ * Every failure from `instance` rejects with the sanitized error, so callers still see a throw.
+ * Unit tests stub `axios.create` with a bare `{ post, get }`, hence the optional chaining.
+ */
+function sanitizeErrors(instance: AxiosInstance, fileDownload: boolean): AxiosInstance {
+  instance.interceptors?.response.use(undefined, (error: unknown) =>
+    Promise.reject(sanitizeTelegramError(error, fileDownload)),
+  );
+  return instance;
+}
+
 @Injectable()
 export class TelegramService {
   private readonly logger = new Logger(TelegramService.name);
@@ -242,17 +322,24 @@ export class TelegramService {
       throw new Error('TELEGRAM_BOT_TOKEN is not set');
     }
 
-    this.api = axios.create({
-      baseURL: `https://api.telegram.org/bot${token}`,
-      timeout: 10_000,
-    });
+    // Both baseURLs embed the token, so both instances strip it from their errors (BUG-0005).
+    this.api = sanitizeErrors(
+      axios.create({
+        baseURL: `https://api.telegram.org/bot${token}`,
+        timeout: 10_000,
+      }),
+      false,
+    );
 
     // File downloads live on a different host path than the Bot API methods.
-    this.files = axios.create({
-      baseURL: `https://api.telegram.org/file/bot${token}`,
-      timeout: 30_000,
-      responseType: 'arraybuffer',
-    });
+    this.files = sanitizeErrors(
+      axios.create({
+        baseURL: `https://api.telegram.org/file/bot${token}`,
+        timeout: 30_000,
+        responseType: 'arraybuffer',
+      }),
+      true,
+    );
 
     this.allowedUsers = this.parseAllowedUsers();
     this.maxVoiceSeconds = this.parseMaxVoiceSeconds();

@@ -1,6 +1,6 @@
 ---
 id: 0005-bot-token-in-error-logs
-state: IN-TESTING
+state: VERIFIED
 severity: high
 attempt: 0
 max_attempts: 3
@@ -20,6 +20,18 @@ failures: []
 ---
 
 # BUG-0005 - A failed Telegram call writes the bot token and the message text to the logs
+
+> **VERIFIED 2026-11-24** (spec-verifier) on telegram-echo-bot-test, live revision b19a975
+> (fix/0005 + lane commit). Cloud Build a2c35ebf for exactly b19a975 SUCCESS (09:12:26-09:14:46 UTC,
+> deploy step SUCCESS). The fix itself is invisible over HTTP in reflect mode, so the deploy was proven
+> live by a probe that differs from the previously deployed 152bb83 (which lacks BUG-0002): POST
+> /ingest/message from 900000003 "call Ostromyra" had no `actorQuestion` at 09:12:04 UTC and had one
+> (questionMessageId 1000000002, a fresh instance) at 09:15:42 UTC. All 5 criteria pass: health 200
+> {"status":"ok"}; repro-fixed, file-api-too, status-kept (npm test 308/308; all 6 tests in
+> test/telegram.error-sanitize.spec.ts fail on tests-only 6c2bae2 on their assertions);
+> delivery-unchanged (reminder znkDDqfbuIzoSsquzw22, one "Нагадування: check the oven" in the 15:45
+> sweep, notification BLSp5IvzU2sZh4WhZ8gp `sent`). Security pass PASS. Owner action still open (out of
+> scope): rotate the bot token in BotFather after this is in production.
 
 > **READY 2026-11-24** (owner: "fix 0005"). Found 2026-11-19 by the spec-verifier during the BUG-0003 security pass, and reproduced
 > locally with a fake token (the token appeared 7 times in one log entry). Present since before

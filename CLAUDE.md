@@ -194,6 +194,25 @@ or `sent` (so, with its next occurrence already armed, it never closes), and a r
 time is stored `allDay: true` (set by code from `hasTimeOfDay === false`, never inferred) and listed
 first, title only.
 
+**The Garmin digest sections only read what the morning job wrote** ([src/garmin/](src/garmin/),
+spec 0018). `garmin-yesterday` (order 10) and `garmin-recovery` (order 11) share one
+`GarminDigestReader` over `users/{id}/health_daily/{YYYY-MM-DD}`, `users/{id}/activities` and
+`users/{id}/system/garminSync`; the bot never writes any of them, and the field names are the
+morning job's (`morning-run/src/garmin-client.ts`: an activity's type is `type`, its length
+`durationSec`, its start `startTimeLocal` as `YYYY-MM-DD HH:mm:ss`). Two dates: Garmin files sleep
+under the **wake-up** date, so recovery reads `{today}` and yesterday reads `{today}` minus one
+calendar day via luxon `minus({ days: 1 })`, never minus 24 hours (DST). Activities are one
+single-field range on `startTimeLocal` - no composite index. A missing field or document is no line,
+never a `0`, and a section with no lines is `null`; "Тренування: вихідний" needs yesterday's
+`health_daily` doc to exist, because without it the day is unknown. Freshness decides the shape:
+no `garminSync` doc means no Garmin section at all; a doc whose `lastSuccessAt` is not on today's
+local date replaces both with one `⌚ Garmin` / `сьогодні даних немає` card (shown by the yesterday
+section; the reader caches the freshness read per `DigestContext` so both agree), which counts as
+content for the 0024 empty-day rule. Formatting lives in the pure `garmin-format.ts` - numbers and
+Garmin's own goal and HRV baseline only, no verdict words except the translated Garmin sleep
+qualifier, and never a raw Garmin key (`strength_training`, `GOOD`) in the chat. Never log a health
+value: user id, section id and line counts only.
+
 **Webhook response contract** ([src/telegram/telegram.controller.ts](src/telegram/telegram.controller.ts)):
 a missing or wrong `X-Telegram-Bot-Api-Secret-Token` gets `401` and is never processed (timing-safe
 compare); everything else gets `200` even when handling throws, so Telegram does not retry the same

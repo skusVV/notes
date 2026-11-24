@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ActorsModule } from './actors/actors.module';
 import { ClockModule } from './clock/clock.module';
 import { FirestoreModule } from './firestore/firestore.module';
+import { GarminModule } from './garmin/garmin.module';
 import { IngestModule } from './ingest/ingest.module';
 import { NotesModule } from './notes/notes.module';
 import { RemindersModule } from './reminders/reminders.module';
@@ -17,6 +18,8 @@ import { TelegramModule } from './telegram/telegram.module';
     ClockModule,
     FirestoreModule,
     RemindersModule,
+    // The digest's Garmin sections; they register into DIGEST_SECTIONS like the reminders one.
+    GarminModule,
     ActorsModule,
     NotesModule,
     SymptomsModule,

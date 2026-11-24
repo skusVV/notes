@@ -44,6 +44,7 @@ differences below. Read that skill for the shared rules instead of duplicating t
 ### 0. Gate
 1. Resolve `<id>` to `docs/bugs/<id>.md`. If missing, or `state` is not `READY`, stop and say why
    (an `OPEN` bug has no locked reproduction or acceptance yet).
+   Also stop if the frontmatter has `delivery: manual`.
 2. Confirm `TEST_URL` and `TEST_WEBHOOK_SECRET` (plus `TEST_INGEST_SECRET` if the bug touches
    `/ingest/*`) are in the git-ignored [.env](../../../.env); source it, do not ask the user.
 3. Confirm the working tree is clean (`git status --short` empty). If not, stop: the implementer's

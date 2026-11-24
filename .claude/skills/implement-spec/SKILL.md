@@ -37,6 +37,8 @@ read-only gcloud guard).
 ### 0. Gate
 1. Resolve `<id>` to `docs/specs/<id>.md`. If it is missing or its `state` is not `READY`, stop and
    tell the user why (only a `READY` spec can enter the pipeline).
+   Also stop if the frontmatter has `delivery: manual`: that spec is built and verified by hand
+   (a separate service or an external credential the verifier does not have), never by this pipeline.
 2. Confirm `TEST_URL` and `TEST_WEBHOOK_SECRET` (plus `TEST_INGEST_SECRET` for `/ingest/*` specs) are available - they live in the git-ignored
    [.env](../../../.env), not in the shell environment, so source it (e.g. `set -a; source .env; set
    +a`) rather than asking the user to export them. Only stop and ask the user if `.env` itself is

@@ -514,8 +514,9 @@ the verifier reads the matching ingest secret from `TEST_INGEST_SECRET` in `.env
   `X-Ingest-Secret` header and `{"userId": <id>}`, so **the time of the digest is that job's Cloud
   Scheduler schedule** - change it in **Cloud Scheduler**, not in the chat (there is no
   `/digest 08:30`). One digest per local day at most: the day is claimed before sending, a second
-  call the same day answers `sent: false, reason: "already_sent"`, and a day with nothing on it sends
-  nothing (`reason: "empty"`). v1 lists today's reminders by their event time; a reminder that also
+  call the same day answers `sent: false, reason: "already_sent"`, and a day with nothing on it still
+  sends a short line (spec 0024: "На сьогодні нічого немає: ні нагадувань, ні нових даних. Гарного
+  дня! ☀️") and claims the day. v1 lists today's reminders by their event time; a reminder that also
   fires as its own nudge arrives both ways, on purpose. No new secret or setting is needed:
   `/ingest/digest` reuses `INGEST_SECRET` and `ALLOWED_USERS`.
 - **Each delivered notification carries OK / +1h / Tomorrow buttons.** `OK` marks **that

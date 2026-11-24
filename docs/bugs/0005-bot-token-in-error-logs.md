@@ -1,17 +1,27 @@
 ---
 id: 0005-bot-token-in-error-logs
-state: OPEN
+state: READY
 severity: high
 attempt: 0
 max_attempts: 3
 branch: fix/0005-bot-token-in-error-logs
-acceptance: []
+acceptance:
+  - id: health
+    assert: "GET / returns HTTP 200 with body {\"status\":\"ok\"}"
+  - id: repro-fixed
+    assert: "npm test passes and includes a regression test, failing on the pre-fix code, in which a Telegram call through TelegramService's axios instance rejects with a real AxiosError whose config has baseURL 'https://api.telegram.org/botSECRET123' and body text 'private'; the error that reaches the caller, serialized the way Nest's Logger.error prints it (message + stack + JSON of own enumerable properties), contains neither 'SECRET123' nor 'private', and its message names the Telegram method (e.g. 'sendMessage') and the HTTP status"
+  - id: file-api-too
+    assert: "npm test includes a passing test that the file-download axios instance (baseURL https://api.telegram.org/file/bot<token>) is sanitized the same way: its rejected error contains no token"
+  - id: status-kept
+    assert: "npm test includes a passing test that the sanitized error keeps a numeric HTTP status at error.response.status (and nothing else under response), so DigestRunnerService's errorCode still logs 'HTTP <status>'; the existing digest-runner send_failed test and the BUG-0003 sweeper retry tests pass unchanged"
+  - id: delivery-unchanged
+    assert: "With X-Test-Now=2026-12-01T09:00:00+02:00, from user 900000005 POST 'Remind me today at 16:00 to check the oven'; POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-12-01T15:45:00+02:00 and the reflected replies contain exactly one string starting with 'Нагадування:' that contains 'oven' (case-insensitive)"
 failures: []
 ---
 
 # BUG-0005 - A failed Telegram call writes the bot token and the message text to the logs
 
-> **OPEN.** Found 2026-11-19 by the spec-verifier during the BUG-0003 security pass, and reproduced
+> **READY 2026-11-24** (owner: "fix 0005"). Found 2026-11-19 by the spec-verifier during the BUG-0003 security pass, and reproduced
 > locally with a fake token (the token appeared 7 times in one log entry). Present since before
 > BUG-0003; that fix only repeats it up to 3 times per failed reminder.
 
@@ -44,9 +54,9 @@ and response objects.
 - `src/telegram/telegram.service.ts`: add one response interceptor to both axios instances that
   replaces any error with a plain `Error` (no `config`, `request` or `response`), whose message
   carries only the HTTP method, the Telegram method name (for example `sendMessage`), the HTTP
-  status, and Telegram's own `description` if one exists. Keep a numeric `status` property on it so
-  callers that read the status (for example `errorCode` in `digest-runner.service.ts`) keep working:
-  check them and adapt only inside this file if possible.
+  status, and Telegram's own `description` if one exists. Keep the status at `error.response.status`
+  (a plain `{ status }` object, nothing else under `response`), because `errorCode` in
+  `digest-runner.service.ts` reads exactly that path and that file is out of scope.
 - `test/`: a regression test.
 
 Out of bounds: rewording the ~30 log call sites; logging policy elsewhere.
@@ -58,7 +68,7 @@ Out of bounds: rewording the ~30 log call sites; logging policy elsewhere.
 - Reflect mode is unchanged.
 - The digest runner still reports `send_failed`, and its log still carries `HTTP <status>`.
 
-## Acceptance criteria (proposed, to lock at READY)
+## Acceptance criteria (locked in the frontmatter at READY)
 
 - **repro-fixed:** the reproduction above logs neither the token nor the body text, and the
   error message still names the Telegram method and HTTP status.

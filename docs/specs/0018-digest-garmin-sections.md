@@ -1,6 +1,6 @@
 ---
 id: 0018-digest-garmin-sections
-state: DRAFT
+state: READY
 attempt: 0
 max_attempts: 3
 branch: feat/0018-digest-garmin-sections

@@ -52,4 +52,4 @@ loses nothing; `low` is cosmetic or only affects tests and tooling.
 | [0002-ingest-actor-question-undeliverable](0002-ingest-actor-question-undeliverable.md) | DONE | medium | A "who is this?" question raised by text sent through `/ingest/message` cannot reach the owner. |
 | [0003-reminder-lost-on-send-failure](0003-reminder-lost-on-send-failure.md) | DONE | high | A reminder whose Telegram send fails is marked `sent` and never retried. |
 | [0004-done-does-not-close-after-ignored-nudge](0004-done-does-not-close-after-ignored-nudge.md) | DONE | medium | Tapping Done does not close a reminder if an earlier nudge was left untapped. |
-| [0005-bot-token-in-error-logs](0005-bot-token-in-error-logs.md) | READY | high | A failed Telegram call logs the bot token and the message text. |
+| [0005-bot-token-in-error-logs](0005-bot-token-in-error-logs.md) | DONE | high | A failed Telegram call logs the bot token and the message text. |

@@ -1,6 +1,6 @@
 ---
 id: 0005-bot-token-in-error-logs
-state: VERIFIED
+state: DONE
 severity: high
 attempt: 0
 max_attempts: 3

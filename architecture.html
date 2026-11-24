@@ -245,7 +245,7 @@
       <p class="section-intro">A Telegram bot that today classifies messages and stores reminders, notes, people and health symptoms, running as one Google Cloud Function. Everything on this page marked <span class="badge badge-planned">PLANNED</span> is designed but not built yet - see <a href="docs/architecture.md" class="code-path">docs/architecture.md</a> for the full reasoning.</p>
       <div class="masthead-meta">
         <span class="chip mono">v1.0.0</span>
-        <span class="chip mono">commit 68e33b0</span>
+        <span class="chip mono">commit a5b7c3a</span>
         <span class="chip">generated 2026-11-24</span>
         <span class="chip mono">regenerate: /update-architecture-docs</span>
       </div>
@@ -761,7 +761,7 @@
 
           <text class="box-sub" x="350" y="270" text-anchor="middle" style="fill:var(--ink-dim)">used only by spec-verifier, over HTTP, never touches production data</text>
         </svg>
-        <figcaption>Same <a href="cloudbuild.yaml" class="code-path">cloudbuild.yaml</a>, two triggers: <span class="mono">^main$</span> deploys production, <span class="mono">testing</span> deploys a disposable isolated copy for the verifier agent.</figcaption>
+        <figcaption>Same <a href="cloudbuild.yaml" class="code-path">cloudbuild.yaml</a>, two triggers: <span class="mono">^main$</span> deploys production, <span class="mono">testing</span> deploys a disposable isolated copy for the verifier agent. A third trigger, <span class="mono">morning-run</span>, builds <a href="morning-run/cloudbuild.yaml" class="code-path">morning-run/cloudbuild.yaml</a> on <span class="mono">^main$</span> when <span class="mono">morning-run/**</span> changes, and deploys the Cloud Run job of the same name (Node 24 image, <span class="mono">--update-env-vars</span> so values set on the job survive redeploys).</figcaption>
       </figure>
     </section>
 
@@ -842,7 +842,7 @@
             <tr><td><a href="docs/specs/0016-split-allowed-users.md" class="code-path">0016-split-allowed-users</a></td><td><span class="badge badge-live">DONE</span></td><td>Prod and test get separate allowlists, and the owner of <span class="mono">/ingest</span> is the first id in <span class="mono">ALLOWED_USERS</span> (replaced by 0017: the request now names its own user).</td></tr>
             <tr><td><a href="docs/specs/0017-ingest-user-id.md" class="code-path">0017-ingest-user-id</a></td><td><span class="badge badge-live">DONE</span></td><td><span class="mono">/ingest/message</span> takes a required <span class="mono">userId</span> in the body, checked against <span class="mono">ALLOWED_USERS</span>, so the bot serves several people with one shared secret.</td></tr></thead>
             <tr><td><a href="docs/specs/0018-digest-garmin-sections.md" class="code-path">0018-digest-garmin-sections</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>Two digest sections from Garmin data: yesterday (steps, floors, workouts) and sleep plus HRV range, as plain text with emoji bars. Data only, no praise.</td></tr>
-            <tr><td><a href="docs/specs/0022-morning-run.md" class="code-path">0022-morning-run</a></td><td><span class="badge badge-planned">DRAFT</span></td><td>One 07:00 job that pulls Garmin (up to 5 attempts) and then calls <span class="mono">/ingest/digest</span>, so the report follows the sync. Manual delivery track.</td></tr>
+            <tr><td><a href="docs/specs/0022-morning-run.md" class="code-path">0022-morning-run</a></td><td><span class="badge badge-live">DONE</span></td><td>One 07:00 Cloud Run job, <a href="morning-run/" class="code-path">morning-run/</a> (formerly <span class="mono">garmin-ingester/</span>, never deployed before): Garmin sync with up to 5 attempts 3 min apart until last night's sleep is in, one alert from the final outcome, then always <span class="mono">POST /ingest/digest</span>. Own trigger (<span class="mono">morning-run/**</span> on <span class="mono">^main$</span>) and a Cloud Scheduler job <span class="mono">0 7 * * *</span> Europe/Kyiv. Manual delivery track.</td></tr>
             <tr><td><a href="docs/specs/0023-digest-gaps.md" class="code-path">0023-digest-gaps</a></td><td><span class="badge badge-live">DONE</span></td><td>Digest fixes: a recurring reminder with no named time is stored <span class="mono">allDay</span> and shows as its title only; "Готово" closes a reminder once none of its notifications is still <span class="mono">scheduled</span> or <span class="mono">sent</span>.</td></tr>
           </tbody>
         </table>
@@ -1074,7 +1074,7 @@
     </section>
 
     <footer>
-      <p>Generated 2026-11-24 from commit <span class="mono">68e33b0</span> on <span class="mono">fix/0005-bot-token-in-error-logs</span>. Source of truth is always the repo, not this page - regenerate after any real architectural change with <span class="mono">/update-architecture-docs</span>.</p>
+      <p>Generated 2026-11-24 from commit <span class="mono">a5b7c3a</span> on <span class="mono">feat/0022-morning-run</span>. Source of truth is always the repo, not this page - regenerate after any real architectural change with <span class="mono">/update-architecture-docs</span>.</p>
     </footer>
 
   </main>

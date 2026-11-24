@@ -676,8 +676,8 @@ in week three.
 
 **[resolved 2026-11-19] `nodejs20` could not be deployed after 2026-10-30.** It did break auto-deploy
 exactly as predicted: every build from 2026-11-02 on failed with "nodejs20 is not a supported runtime
-on GCF 2nd gen". `cloudbuild.yaml` now uses `--runtime=nodejs24`. `garmin-ingester` still builds on
-`node:20-slim` (a container, so it still deploys, but Node 20 is past end of life).
+on GCF 2nd gen". `cloudbuild.yaml` now uses `--runtime=nodejs24`. The Garmin job (now `morning-run/`,
+spec 0022) moved to `node:24-slim` as well.
 
 ---
 

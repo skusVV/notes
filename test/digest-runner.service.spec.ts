@@ -131,14 +131,54 @@ describe('DigestRunnerService.run', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
-  it('empty: nothing to show sends nothing and does not claim the day', async () => {
+  it('empty day: sends the greeting plus the empty-day line and claims the day', async () => {
     const { runner, store, send } = makeRunner({ seed: enabled(), lines: [] });
+    const sink: string[] = [];
 
-    expect(await runner.run(U3, MORNING)).toEqual({ sent: false, reason: 'empty' });
+    expect(await runner.run(U3, MORNING, sink)).toEqual({ sent: true });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sink).toEqual([
+      [
+        'Доброго ранку! Сьогодні 16 вересня.',
+        '',
+        'На сьогодні нічого немає: ні нагадувань, ні нових даних. Гарного дня! ☀️',
+      ].join('\n'),
+    ]);
+    expect((store.docs.get(`users/${U3}`)?.digest as { lastSentOn: string }).lastSentOn).toBe(
+      '2026-09-16',
+    );
+  });
+
+  it('empty day: a second call the same day is already_sent with nothing sent', async () => {
+    const { runner, send } = makeRunner({ seed: enabled(), lines: [] });
+
+    expect(await runner.run(U3, MORNING)).toEqual({ sent: true });
+    const sink: string[] = [];
+    expect(await runner.run(U3, MORNING, sink)).toEqual({ sent: false, reason: 'already_sent' });
+    expect(sink).toEqual([]);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('disabled still comes first on an empty day: nothing is sent, not even the empty-day line', async () => {
+    const { runner, section, send, store } = makeRunner({
+      seed: { [`users/${U3}`]: { digest: { enabled: false, chatId: U3 } } },
+      lines: [],
+    });
+    const sink: string[] = [];
+
+    expect(await runner.run(U3, MORNING, sink)).toEqual({ sent: false, reason: 'disabled' });
+    expect(section.calls).toBe(0);
     expect(send).not.toHaveBeenCalled();
+    expect(sink).toEqual([]);
     expect((store.docs.get(`users/${U3}`)?.digest as Record<string, unknown>).lastSentOn).toBe(
       undefined,
     );
+  });
+
+  it('never reports the removed empty reason', async () => {
+    const { runner } = makeRunner({ seed: enabled(), lines: [] });
+    const result = await runner.run(U3, MORNING);
+    expect(result.reason).toBeUndefined();
   });
 
   it('losing the claim race to an overlapping call is already_sent, with no send', async () => {

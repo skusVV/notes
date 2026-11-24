@@ -19,6 +19,13 @@ export const DIGEST_MAX_LINES_PER_SECTION = 15;
 const BULLET = '• ';
 
 /**
+ * The whole body of a digest whose sections are all empty (or all failed). Sent rather than nothing,
+ * because a silent morning looks like a breakage. No bullet: it is not a section line.
+ */
+export const DIGEST_EMPTY_DAY_LINE =
+  'На сьогодні нічого немає: ні нагадувань, ні нових даних. Гарного дня! ☀️';
+
+/**
  * Assembles the morning digest from whatever sections are registered. It knows only the
  * `DigestSection` interface: a new section never needs a change here.
  */
@@ -29,14 +36,14 @@ export class DigestService {
   constructor(@Inject(DIGEST_SECTIONS) private readonly sections: DigestSection[]) {}
 
   /**
-   * The digest text for `ctx`, or `undefined` when every section is empty - an empty day sends
-   * nothing at all.
+   * The digest text for `ctx`. When every section is empty (or failed) it is the greeting plus
+   * {@link DIGEST_EMPTY_DAY_LINE} - an empty day still gets a message.
    *
    * Sections are asked in parallel, each in its own try/catch: one that throws is logged by id and
    * skipped, and the rest still make the message. Plain text - the caller sends it with no
    * `parse_mode`, because section lines carry the user's own words.
    */
-  async build(ctx: DigestContext): Promise<string | undefined> {
+  async build(ctx: DigestContext): Promise<string> {
     const results = await Promise.all(
       this.sections.map(async (section) => {
         try {
@@ -61,7 +68,8 @@ export class DigestService {
       .sort((a, b) => a.section.order - b.section.order);
 
     if (shown.length === 0) {
-      return undefined;
+      this.logger.log(`Digest for user ${ctx.userId}: empty day`);
+      return [greeting(ctx), DIGEST_EMPTY_DAY_LINE].join('\n\n');
     }
 
     // Counts only: the lines themselves are the user's private notes.

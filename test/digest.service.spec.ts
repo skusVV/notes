@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DIGEST_MAX_LINES_PER_SECTION, DigestService } from '../src/digest/digest.service';
+import {
+  DIGEST_EMPTY_DAY_LINE,
+  DIGEST_MAX_LINES_PER_SECTION,
+  DigestService,
+} from '../src/digest/digest.service';
 import { DigestContext, DigestSection, DigestSectionResult } from '../src/digest/digest.types';
 
 const CTX: DigestContext = {
@@ -77,25 +81,64 @@ describe('DigestService.build', () => {
     expect(text).toContain('• Лікар - о 17:30');
   });
 
-  it('returns undefined when every section is null or empty', async () => {
+  // spec 0024: an empty day is the greeting, a blank line and the empty-day line - nothing else.
+  const EMPTY_DAY = [
+    'Доброго ранку! Сьогодні 16 вересня.',
+    '',
+    'На сьогодні нічого немає: ні нагадувань, ні нових даних. Гарного дня! ☀️',
+  ].join('\n');
+
+  it('the empty-day line is exact and carries no bullet', () => {
+    expect(DIGEST_EMPTY_DAY_LINE).toBe(
+      'На сьогодні нічого немає: ні нагадувань, ні нових даних. Гарного дня! ☀️',
+    );
+    expect(DIGEST_EMPTY_DAY_LINE.startsWith('• ')).toBe(false);
+  });
+
+  it('every section null or empty gives the greeting plus the empty-day line', async () => {
     const service = new DigestService([
       section('none', 10, null),
       section('empty', 20, { title: 'Порожньо', lines: [] }),
     ]);
-    expect(await service.build(CTX)).toBeUndefined();
+    const text = await service.build(CTX);
+    expect(text).toBe(EMPTY_DAY);
+    expect(text).not.toContain('Порожньо');
+    expect(text).not.toContain('• ');
   });
 
-  it('returns undefined when the only section throws', async () => {
+  it('the only section throwing gives the empty-day line', async () => {
     const service = new DigestService([
       section('broken', 10, async () => {
         throw new Error('boom');
       }),
     ]);
-    expect(await service.build(CTX)).toBeUndefined();
+    expect(await service.build(CTX)).toBe(EMPTY_DAY);
   });
 
-  it('returns undefined when no section is registered', async () => {
-    expect(await new DigestService([]).build(CTX)).toBeUndefined();
+  it('every section throwing gives the empty-day line', async () => {
+    const service = new DigestService([
+      section('broken-a', 10, async () => {
+        throw new Error('boom');
+      }),
+      section('broken-b', 20, async () => {
+        throw new Error('bang');
+      }),
+    ]);
+    expect(await service.build(CTX)).toBe(EMPTY_DAY);
+  });
+
+  it('no section registered gives the empty-day line', async () => {
+    expect(await new DigestService([]).build(CTX)).toBe(EMPTY_DAY);
+  });
+
+  it('a non-empty digest never carries the empty-day line', async () => {
+    const service = new DigestService([
+      section('empty', 10, { title: 'Порожньо', lines: [] }),
+      section('reminders', 100, { title: 'Нагадування', lines: ['bread - о 12:00'] }),
+    ]);
+    const text = await service.build(CTX);
+    expect(text).toContain('bread');
+    expect(text).not.toContain('На сьогодні нічого немає');
   });
 
   it('hides an empty section but shows its non-empty neighbours', async () => {

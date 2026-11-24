@@ -175,10 +175,11 @@ cannot parse is returned unchanged, the same discipline as `normalizeEventAt`.
 `IngestGuard` secret, then `400 invalid_user`, then `403 user_not_allowed` before anything is read or
 sent, then always `200`) is called by the morning job (spec 0022), so the digest time lives in that
 job's Cloud Scheduler schedule. `/sweep` knows nothing about it - do not add digest steps there.
-`DigestRunnerService.run` answers `sent` or a `reason` (`disabled`, `already_sent`, `empty`,
+`DigestRunnerService.run` answers `sent` or a `reason` (`disabled`, `already_sent`,
 `send_failed`); it **claims** the local day (`users/{id}.digest.lastSentOn`, transaction) *before*
-sending, so two calls can never send twice, a failed send is not retried, and an empty day claims
-nothing. The day is `localDay(now, DEFAULT_TIMEZONE)` - next local midnight, not `+24h`, because DST
+sending, so two calls can never send twice and a failed send is not retried. An empty day is not
+silent: when every section is empty (or failed) the digest is the greeting plus one unbulleted line
+(`DIGEST_EMPTY_DAY_LINE`), sent and claimed like any other (spec 0024). The day is `localDay(now, DEFAULT_TIMEZONE)` - next local midnight, not `+24h`, because DST
 days are 23 or 25 hours. `DigestService` knows only the `DigestSection` interface: a section is one
 class plus one registration in its own module (it pushes itself into the `DIGEST_SECTIONS` array in
 `onModuleInit`, as `RemindersDigestSection` does), sorted by `order`, each built in its own

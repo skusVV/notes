@@ -126,7 +126,7 @@ export class IngestController {
    * user outside `ALLOWED_USERS` - and that 403 comes before anything is read or sent.
    *
    * After validation the answer is always 200: `sent` says whether a digest went out and `reason`
-   * why not (`disabled`, `already_sent`, `empty`, `send_failed`). A failure is logged by user id and
+   * why not (`disabled`, `already_sent`, `send_failed`). A failure is logged by user id and
    * still answers 200, with `sent: false` and no reason.
    */
   @Post('digest')

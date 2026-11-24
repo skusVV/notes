@@ -6,7 +6,7 @@ import { DigestService } from './digest.service';
 import { localDay } from './local-day';
 
 /** Why a digest was not sent. Reported in the `/ingest/digest` response body. */
-export type DigestSkipReason = 'disabled' | 'already_sent' | 'empty' | 'send_failed';
+export type DigestSkipReason = 'disabled' | 'already_sent' | 'send_failed';
 
 export interface DigestRunResult {
   sent: boolean;
@@ -37,7 +37,8 @@ export class DigestRunnerService {
 
   /**
    * One run for one user at `now`. Never sends twice for the same local day: the day is claimed in a
-   * transaction **before** the send, and a send that fails is logged and not retried.
+   * transaction **before** the send, and a send that fails is logged and not retried. An empty day
+   * is no exception - it sends the short empty-day digest and claims the day like any other.
    */
   async run(userId: number, now: Date, sink?: string[]): Promise<DigestRunResult> {
     const settings = await this.settings.get(userId);
@@ -58,10 +59,6 @@ export class DigestRunnerService {
       dayStart: day.dayStart,
       dayEnd: day.dayEnd,
     });
-    if (text === undefined) {
-      // An empty day sends nothing and does not claim the day.
-      return this.skip(userId, 'empty');
-    }
 
     if (!(await this.settings.claimToday(userId, day.dateKey))) {
       // An overlapping call claimed this day between the read above and the transaction.

@@ -1,6 +1,6 @@
 ---
 id: 0024-empty-digest-message
-state: IN-TESTING
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0024-empty-digest-message
@@ -22,6 +22,17 @@ failures: []
 
 > **READY 2026-11-24** (власник). Звичайний конвеєр (`/implement-spec`), перевірка по HTTP на тестовій
 > функції.
+
+> **VERIFIED 2026-11-24** (spec-verifier) on telegram-echo-bot-test, live revision 8b5eec5 (feat/0024 +
+> lane commit). Deploy proven live by a throwaway probe (U3 900000003, X-Test-Now 2027-04-20T07:00+03:00):
+> `/ingest/digest` answered `reason: "empty"` from 10:17:30 to 10:19:34 UTC and flipped to `sent: true`
+> with the empty-day line at 10:20:00 UTC. health 200 `{"status":"ok"}`; empty-day-sends (U4, 2027-03-15:
+> one reply, first line 'Доброго ранку! Сьогодні 15 березня.', exact empty-day line); empty-day-claims
+> (`sent: false, reason: "already_sent"`, `replies: []`, lastSentOn '2027-03-15'); non-empty-unchanged
+> (U5: 'Доброго ранку! Сьогодні 16 березня.' + '• Buy bread - о 12:00', no empty-day line);
+> disabled-unchanged (U6: `sent: false, reason: "disabled"`, `replies: []`). Security PASS. npm test
+> 314/314, build clean. Note: README.md (morning digest bullet) still says an empty day sends nothing
+> (`reason: "empty"`) - stale doc outside this spec's Scope.
 
 ## Context
 

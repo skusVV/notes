@@ -1,6 +1,6 @@
 ---
 id: 0022-morning-run
-state: DRAFT
+state: READY
 attempt: 0
 max_attempts: 3
 branch: feat/0022-morning-run

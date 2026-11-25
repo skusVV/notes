@@ -133,7 +133,7 @@ export function normalizeRecurrence(
 }
 
 /** 'HH:mm' in range, or `undefined` - which the caller turns into the 09:00 default. */
-function normalizeAtLocal(value: unknown): string | undefined {
+export function normalizeAtLocal(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }

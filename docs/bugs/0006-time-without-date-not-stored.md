@@ -1,6 +1,6 @@
 ---
 id: 0006-time-without-date-not-stored
-state: READY
+state: VERIFIED
 severity: medium
 attempt: 0
 max_attempts: 3
@@ -26,6 +26,21 @@ failures: []
 ---
 
 # BUG-0006 - A reminder with a clock time but no day is not stored
+
+> **VERIFIED 2026-11-25** (spec-verifier) on telegram-echo-bot-test, live revision 588a99c
+> (fix/0006 + lane commit). The deploy was proven live by a deterministic marker, since the old
+> revision (4504cfc) predates spec 0024: POST /ingest/digest for 900000006 (digest on, no data)
+> answered `reason: "empty"` until 04:45:40 UTC and the 0024 empty-day digest from 04:46:01 UTC. All 7
+> criteria pass at X-Test-Now 2026-11-25T06:10:00+02:00: health 200 {"status":"ok"}; repro-fixed
+> (one new one-off reminder PXfA6HYhV4tDPsNVrobW, eventAt 2026-11-25T07:30:00+02:00; see caveat);
+> bare-hour 2026-11-25T17:00:00+02:00; today-not-tomorrow 2026-11-25T09:00:00+02:00;
+> passed-time-rolls-over 2026-11-26T06:00:00+02:00; dated-unchanged 2026-11-27T20:00:00+02:00 (each
+> exactly one reminder, no recurrence); no-time-still-asks (0.49 clarify reply, 0 reminders);
+> unit-regression (npm test 367/367; the 3 BUG-0006 time-only tests fail on the tests-only a28893b on
+> their assertions). Caveat on repro-fixed: a pre-deploy baseline run of the repro on the OLD revision
+> stored it as a **daily recurring** reminder (Mc757Uv4qYiAXqiI7h6v, not the "asks" result above), so
+> 900000001's export shows that stale one plus the new one; the same repro on the clean user 900000006
+> gave exactly one reminder (cUm1Zqc3cOGcZqdXUqlQ, 07:30 today, no recurrence). Security pass PASS.
 
 > **READY 2026-11-25** (owner: "можеш робити фікс без мене"). Found in prod logs the same morning:
 > two voice reminders from the owner at 04:09 and 04:10 UTC both logged

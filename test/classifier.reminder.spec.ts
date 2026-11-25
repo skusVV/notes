@@ -293,3 +293,123 @@ describe('ClassifierService allDay flag (0023)', () => {
     expect(result.items[0].reminder).not.toHaveProperty('allDay');
   });
 });
+
+// BUG-0006: a clock time with no day ("о пів на восьму", "о 5") is resolved by code to its next
+// occurrence strictly after now, instead of being dropped to clarify or left to the model's
+// today/tomorrow arithmetic.
+describe('ClassifierService time without a date (BUG-0006)', () => {
+  const kyivMorning: ClassifierContext = { timezone: 'Europe/Kyiv', now: '2026-11-25T06:10:00+02:00' };
+  let classifier: ClassifierService;
+
+  beforeEach(() => {
+    mockGenerateContent.mockReset();
+    classifier = makeClassifier();
+  });
+
+  // acceptance: unit-regression / repro-fixed - no eventAt from the model, time still ahead today
+  it('resolves a time-only reminder still ahead today to today, keeping confidence', async () => {
+    replyWithReminder(0.95, {
+      title: 'вигуляти собаку',
+      hasTimeOfDay: true,
+      dateStated: false,
+      atLocal: '07:30',
+    });
+
+    const result = await classifier.classify('Нагадай мені о пів на восьму вигуляти собаку', kyivMorning);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-25T07:30:00+02:00');
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // acceptance: unit-regression / passed-time-rolls-over - a time already passed today is tomorrow
+  it('resolves a time-only reminder already passed today to tomorrow', async () => {
+    replyWithReminder(0.95, {
+      title: 'випити вітаміни',
+      hasTimeOfDay: true,
+      dateStated: false,
+      atLocal: '06:00',
+    });
+
+    const result = await classifier.classify('Нагадай мені о 6 ранку випити вітаміни', kyivMorning);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-26T06:00:00+02:00');
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // acceptance: today-not-tomorrow - code overrides a wrong date the model computed itself
+  it("overrides the model's own eventAt when no date was stated", async () => {
+    replyWithReminder(0.95, {
+      title: 'взяти документи на роботу',
+      eventAt: '2026-11-26T09:00:00+02:00',
+      hasTimeOfDay: true,
+      dateStated: false,
+      atLocal: '09:00',
+    });
+
+    const result = await classifier.classify('Нагадай о дев’ятій ранку взяти документи на роботу', kyivMorning);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-25T09:00:00+02:00');
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // No regression: a stated day keeps the model's eventAt (dated-unchanged).
+  it("keeps the model's eventAt when the date was stated", async () => {
+    replyWithReminder(0.95, {
+      title: 'вечеря',
+      eventAt: '2026-11-27T20:00:00+02:00',
+      hasTimeOfDay: true,
+      dateStated: true,
+      atLocal: '20:00',
+    });
+
+    const result = await classifier.classify('Нагадай в п’ятницю о 8 вечора про вечерю', kyivMorning);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-27T20:00:00+02:00');
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // No regression: without atLocal nothing is computed; the existing eventAt rules apply.
+  it('keeps the existing behaviour when atLocal is absent', async () => {
+    replyWithReminder(0.95, { title: 'вигуляти собаку', hasTimeOfDay: true, dateStated: false });
+
+    const result = await classifier.classify('Нагадай вигуляти собаку', kyivMorning);
+
+    expect(result.items[0].reminder?.eventAt).toBeUndefined();
+    expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+  });
+
+  // Invent-nothing: an absent dateStated is not a "no", and hasTimeOfDay stays the gate.
+  it('does not override when dateStated is absent or hasTimeOfDay is not true', async () => {
+    replyWithReminder(0.95, { title: 'a', hasTimeOfDay: true, atLocal: '07:30' });
+    replyWithReminder(0.95, { title: 'b', hasTimeOfDay: false, dateStated: false, atLocal: '07:30' });
+
+    const absent = await classifier.classify('a', kyivMorning);
+    const noTime = await classifier.classify('b', kyivMorning);
+
+    expect(absent.items[0].reminder?.eventAt).toBeUndefined();
+    expect(absent.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+    expect(noTime.items[0].reminder?.eventAt).toBeUndefined();
+    expect(noTime.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+  });
+
+  // No regression: a recurring reminder is untouched by the override.
+  it('leaves a recurring reminder untouched', async () => {
+    replyWithReminder(0.95, {
+      title: 'stretch',
+      hasTimeOfDay: true,
+      dateStated: false,
+      atLocal: '07:30',
+      recurrence: { freq: 'daily', atLocal: '07:30', evidence: 'every day' },
+    });
+
+    const result = await classifier.classify('Remind me every day at 7:30 to stretch', kyivMorning);
+
+    expect(result.items[0].reminder?.eventAt).toBeUndefined();
+    expect(result.items[0].reminder?.recurrence).toEqual({
+      freq: 'daily',
+      atLocal: '07:30',
+      timezone: 'Europe/Kyiv',
+    });
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+});

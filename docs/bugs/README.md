@@ -55,3 +55,4 @@ loses nothing; `low` is cosmetic or only affects tests and tooling.
 | [0005-bot-token-in-error-logs](0005-bot-token-in-error-logs.md) | DONE | high | A failed Telegram call logs the bot token and the message text. |
 | [0006-time-without-date-not-stored](0006-time-without-date-not-stored.md) | DONE | medium | A reminder with a clock time but no day ("о 5") is not stored, or lands on the wrong day. |
 | [0007-day-without-time-with-nudges-not-stored](0007-day-without-time-with-nudges-not-stored.md) | READY | medium | A day with no clock time ("в суботу вранці") plus explicit nudge times is refused (0.49); a bare "о 8" lands on the wrong half of the day. |
+| [0008-recurrence-end-ignored](0008-recurrence-end-ignored.md) | READY | high | A repeat's stated end ("протягом 14 днів", "до 1 грудня") is dropped, so the reminder fires forever. |

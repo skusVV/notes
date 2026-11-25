@@ -8,6 +8,8 @@ import {
   DEFAULT_RECURRENCE_HOUR,
   RECURRENCE_FREQ,
   WEEKDAYS,
+  nextOccurrenceAfter,
+  normalizeAtLocal,
   normalizeRecurrence,
 } from '../reminders/recurrence';
 import {
@@ -80,8 +82,9 @@ const RESPONSE_SCHEMA: Schema = {
                 type: Type.STRING,
                 description:
                   'When the event itself happens, ISO 8601 with offset, resolved from the ' +
-                  'current local time given below. Emit ONLY when the message gives both a ' +
-                  'specific date AND an explicit clock time. Omit entirely otherwise - never ' +
+                  'current local time given below. Emit ONLY when the message gives an explicit ' +
+                  'clock time; with no date, that time resolves to its next occurrence after ' +
+                  'now. Omit entirely when no clock time was stated - never ' +
                   'copy or assume the time of day from the current local time.',
               },
               hasTimeOfDay: {
@@ -92,6 +95,20 @@ const RESPONSE_SCHEMA: Schema = {
                   'weekday with no time. Judge the words the user actually said - do NOT set ' +
                   'true just because eventAt has a time; the current local time is not a time ' +
                   'the user gave.',
+              },
+              atLocal: {
+                type: Type.STRING,
+                description:
+                  'The explicit clock time the user stated, as "HH:mm" 24-hour ("о пів на ' +
+                  'восьму" -> "07:30", "о 5 вечора" -> "17:00"). OMIT when no clock time was ' +
+                  'stated. Never copy the current local time.',
+              },
+              dateStated: {
+                type: Type.BOOLEAN,
+                description:
+                  'true when the message names the day of the event in any form ("today", ' +
+                  '"tomorrow", "Thursday", "on the 25th", "сьогодні", "завтра"). false when it ' +
+                  'gives only a clock time with no day at all ("о 5", "at 7:30").',
               },
               notifyAt: {
                 type: Type.ARRAY,
@@ -168,6 +185,8 @@ const RESPONSE_SCHEMA: Schema = {
               'title',
               'eventAt',
               'hasTimeOfDay',
+              'atLocal',
+              'dateStated',
               'notifyAt',
               'leadMinutes',
               'recurrence',
@@ -344,12 +363,20 @@ export class ClassifierService {
       `Current local time: ${now} (timezone ${timezone}).`,
       'Resolve every relative date and time against that "now", and emit eventAt as ISO 8601 with',
       "the user's local offset. Date-resolution rules:",
-      '- Emit eventAt ONLY when the message gives BOTH a specific date AND an explicit time of day.',
-      '  If either is missing, omit eventAt and set hasTimeOfDay=false.',
+      '- Emit eventAt ONLY when the message gives an explicit time of day. With no clock time, omit',
+      '  eventAt and set hasTimeOfDay=false.',
       '- The current local time above is context for resolving dates, NOT a default time. Never copy',
       '  its hour/minute into eventAt. If the user named no clock time, there is no time to emit.',
       '- Set hasTimeOfDay=true only when the user stated an explicit clock time ("at 12", "18:00",',
       '  "noon"); set it false for a date/weekday with no time.',
+      '- A clock time with NO date ("at 7:30", "о 5", "о пів на восьму") is still a full time: it',
+      '  means the next occurrence of that clock time strictly after now - today if it is still',
+      '  ahead, otherwise tomorrow. Emit eventAt and hasTimeOfDay=true; do not ask for a date.',
+      '- An hour 1-12 with no part-of-day word ("о 5", "at 7") means whichever of H:00 and',
+      '  (H+12):00 comes first strictly after now. With a part-of-day word ("ранку", "вечора",',
+      '  "am", "pm") use that half of the day.',
+      '- Ukrainian "пів на N" is (N-1):30 ("пів на восьму" = 07:30 or 19:30), and "чверть на N" is',
+      '  (N-1):15. These are clock times, NOT leadMinutes.',
       '- A bare weekday ("Thursday") means its next occurrence strictly after now.',
       '- "next {weekday}" means the occurrence in the following week, not tomorrow.',
       '- "the Nth" means the next occurrence of that day-of-month that is not before today.',
@@ -358,6 +385,8 @@ export class ClassifierService {
       '  hasTimeOfDay=true.',
       '- "remind me on Thursday to call the doctor" -> NO time of day given, so omit eventAt and set',
       '  hasTimeOfDay=false. Do NOT reuse the current time.',
+      '- now = 06:10: "нагадай о 5 зустрітись з дружиною" -> eventAt = today 17:00 local;',
+      '  "нагадай о дев\'ятій ранку" -> today 09:00; "нагадай о 6 ранку" -> tomorrow 06:00.',
       '',
       'Notify times (notifyAt). eventAt is when the thing HAPPENS; notifyAt is when to NUDGE, and a',
       'message can ask for several nudges about one event. Rules:',
@@ -588,6 +617,13 @@ export class ClassifierService {
         leadMinutes: optionalInt(reminder.leadMinutes),
         recurrence,
       };
+      // A clock time with no day ("о 5", "о пів на восьму") is resolved here, not by the model:
+      // the next occurrence of that wall-clock time strictly after now. Date arithmetic is the
+      // part a small model gets wrong (today vs tomorrow), and this one has a single answer.
+      const atLocal = normalizeAtLocal(reminder.atLocal);
+      if (!recurrence && reminder.hasTimeOfDay === true && reminder.dateStated === false && atLocal) {
+        item.reminder.eventAt = nextOccurrenceAfter({ freq: 'daily', atLocal, timezone }, now);
+      }
       // A recurring reminder with no stated clock time is all-day: the 09:00 default is a nudge
       // time, not a time the user named. Only an explicit `false` counts - absent is not a "no".
       if (recurrence && reminder.hasTimeOfDay === false) {

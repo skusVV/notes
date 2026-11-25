@@ -6,6 +6,7 @@ import {
   nextOccurrence,
   nextOccurrenceAfter,
   normalizeRecurrence,
+  untilFromForDays,
 } from '../src/reminders/recurrence';
 
 const ZONE = 'Europe/Kyiv';
@@ -209,5 +210,93 @@ describe('describeRecurrence', () => {
         describeRecurrence(rule({ freq: 'weekly', weekday: weekday as never, atLocal: '08:00' })),
       ).toBe(`${word} о 8:00`);
     }
+  });
+});
+
+describe('recurrence end (BUG-0008)', () => {
+  /** "every day at 7 for the next 14 days", asked on 2026-11-05: the 14th occurrence is the 19th. */
+  const CERT = rule({ freq: 'daily', atLocal: '07:00', until: '2026-11-19' });
+
+  // acceptance: unit-stops-at-until - `until` is inclusive: the 19th still fires, nothing after it
+  it('stops a daily rule after its inclusive until date', () => {
+    expect(nextOccurrenceAfter(CERT, new Date('2026-11-18T07:00:00+02:00'))).toBe(
+      '2026-11-19T07:00:00+02:00',
+    );
+    expect(nextOccurrenceAfter(CERT, new Date('2026-11-19T07:00:00+02:00'))).toBeUndefined();
+    expect(nextOccurrence(CERT, new Date('2026-11-19T07:30:00+02:00'))).toBeUndefined();
+  });
+
+  it('has no first occurrence when until is before it', () => {
+    expect(nextOccurrence(CERT, new Date('2026-11-20T06:00:00+02:00'))).toBeUndefined();
+    expect(
+      nextOccurrence(
+        rule({ freq: 'yearly', month: 6, day: 12, until: '2027-06-11' }),
+        new Date('2026-11-05T12:00:00+02:00'),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('judges until against the occurrence\'s local date, not its UTC date', () => {
+    // 00:30 Kyiv on the 19th is still the 18th in UTC; the local date is what counts.
+    const night = rule({ freq: 'daily', atLocal: '00:30', until: '2026-11-19' });
+
+    expect(nextOccurrenceAfter(night, new Date('2026-11-18T00:30:00+02:00'))).toBe(
+      '2026-11-19T00:30:00+02:00',
+    );
+    expect(nextOccurrenceAfter(night, new Date('2026-11-19T00:30:00+02:00'))).toBeUndefined();
+  });
+
+  it('keeps a valid until when validating, including a stored rule with no evidence', () => {
+    expect(
+      normalizeRecurrence({ freq: 'daily', atLocal: '07:00', until: '2026-11-19' }, ZONE),
+    ).toEqual({ freq: 'daily', atLocal: '07:00', timezone: ZONE, until: '2026-11-19' });
+  });
+
+  // Absent stays absent; a bad until is dropped like any other bad field, never repaired.
+  it('leaves until absent when none or an unusable one was given', () => {
+    for (const bad of [undefined, '', '19 листопада', '2026-13-01', '2026-02-30', '2026-11-19T07:00', 20261119]) {
+      const normalized = normalizeRecurrence({ freq: 'daily', until: bad }, ZONE);
+      expect(normalized).toEqual({ freq: 'daily', atLocal: '09:00', timezone: ZONE });
+      expect(normalized).not.toHaveProperty('until');
+    }
+  });
+
+  it('never stores forDays', () => {
+    expect(normalizeRecurrence({ freq: 'daily', forDays: 14 }, ZONE)).not.toHaveProperty('forDays');
+  });
+
+  // acceptance: repro-fixed - "for N days, every day" is exactly N occurrences, counted from the
+  // FIRST occurrence (tomorrow 07:00 here, since 07:00 today has passed).
+  it('converts forDays to the local date of the first occurrence plus forDays - 1', () => {
+    const daily = rule({ freq: 'daily', atLocal: '07:00' });
+    const asked = new Date('2026-11-05T11:48:00+02:00');
+
+    expect(untilFromForDays(daily, 14, asked)).toBe('2026-11-19');
+    expect(untilFromForDays(daily, 1, asked)).toBe('2026-11-06');
+    // Before 07:00 the first occurrence is today.
+    expect(untilFromForDays(daily, 14, new Date('2026-11-05T06:00:00+02:00'))).toBe('2026-11-18');
+  });
+
+  it('counts calendar days across a DST change, not 24-hour blocks', () => {
+    // Kyiv leaves summer time on 2026-10-25; a 00:30 rule would drift a day with 24h arithmetic.
+    const night = rule({ freq: 'daily', atLocal: '00:30' });
+
+    expect(untilFromForDays(night, 14, new Date('2026-10-20T12:00:00+03:00'))).toBe('2026-11-03');
+  });
+
+  it('refuses a forDays that is not a positive integer', () => {
+    const daily = rule({ freq: 'daily', atLocal: '07:00' });
+    for (const bad of [0, -3, 1.5, Number.NaN, '14', undefined, null]) {
+      expect(untilFromForDays(daily, bad, NOW)).toBeUndefined();
+    }
+  });
+
+  // The reply shows the end was understood, through the same month-genitive rendering.
+  it('appends the end to the Ukrainian description', () => {
+    expect(describeRecurrence(CERT)).toBe('щодня о 7:00 до 19 листопада');
+    expect(describeRecurrence(rule({ freq: 'daily', atLocal: '21:00', until: '2026-12-01' }))).toBe(
+      'щодня о 21:00 до 1 грудня',
+    );
+    expect(describeRecurrence(rule({ freq: 'daily', atLocal: '07:00' }))).toBe('щодня о 7:00');
   });
 });

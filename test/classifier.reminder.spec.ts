@@ -622,3 +622,121 @@ describe('ClassifierService day without a time, with nudges (BUG-0007)', () => {
     expect(early.items[0].reminder?.eventAt).toBe('2026-11-25T07:30:00+02:00');
   });
 });
+
+describe('ClassifierService recurrence end (BUG-0008)', () => {
+  let classifier: ClassifierService;
+  /** The owner's message was sent on 2026-11-05 at 11:48 Kyiv; 07:00 that day had passed. */
+  const asked: ClassifierContext = { timezone: 'Europe/Kyiv', now: '2026-11-05T11:48:00+02:00' };
+  const later: ClassifierContext = { timezone: 'Europe/Kyiv', now: '2026-11-25T10:00:00+02:00' };
+
+  function daily(end: Record<string, unknown>): Record<string, unknown> {
+    return {
+      title: 'certification',
+      hasTimeOfDay: true,
+      recurrence: { freq: 'daily', atLocal: '07:00', evidence: 'кожного дня', ...end },
+    };
+  }
+
+  beforeEach(() => {
+    mockGenerateContent.mockReset();
+    classifier = makeClassifier();
+  });
+
+  // acceptance: repro-fixed - code, not the model, turns forDays into an inclusive local until,
+  // counted from the first occurrence (2026-11-06 07:00): 14 days -> the 19th. forDays itself is
+  // never carried on.
+  it('converts forDays into until counted from the first occurrence', async () => {
+    replyWithReminder(0.95, daily({ forDays: 14 }));
+
+    const result = await classifier.classify('кожного дня о 7:00 протягом 14 днів', asked);
+
+    expect(result.items[0].confidence).toBe(0.95);
+    expect(result.items[0].reminder?.recurrence).toEqual({
+      freq: 'daily',
+      atLocal: '07:00',
+      timezone: 'Europe/Kyiv',
+      until: '2026-11-19',
+    });
+    expect(result.items[0].reminder?.recurrence).not.toHaveProperty('forDays');
+  });
+
+  // acceptance: until-date
+  it('carries a stated until date through to the draft', async () => {
+    replyWithReminder(0.95, {
+      title: 'vitamins',
+      hasTimeOfDay: true,
+      recurrence: { freq: 'daily', atLocal: '21:00', until: '2026-12-01', evidence: 'Щодня' },
+    });
+
+    const result = await classifier.classify('Щодня о 9 вечора до 1 грудня нагадуй мені пити вітаміни', later);
+
+    expect(result.items[0].confidence).toBe(0.95);
+    expect(result.items[0].reminder?.recurrence).toEqual({
+      freq: 'daily',
+      atLocal: '21:00',
+      timezone: 'Europe/Kyiv',
+      until: '2026-12-01',
+    });
+  });
+
+  // acceptance: no-end-unchanged - absent stays absent, never a placeholder end
+  it('leaves until absent when the model stated no end', async () => {
+    replyWithReminder(0.95, daily({}));
+
+    const result = await classifier.classify('кожного дня о 7:00', asked);
+
+    expect(result.items[0].confidence).toBe(0.95);
+    expect(result.items[0].reminder?.recurrence).not.toHaveProperty('until');
+  });
+
+  // A stated end that cannot be kept must not silently become "forever": the bot asks instead.
+  it('forces confidence below CONFIDENCE_ASK for an unusable forDays or until', async () => {
+    const bad = [
+      { forDays: 0 },
+      { forDays: -2 },
+      { forDays: 1.5 },
+      { forDays: 'two weeks' },
+      { until: '1 грудня' },
+      { until: '2026-13-01' },
+    ];
+    for (const end of bad) {
+      replyWithReminder(0.95, daily(end));
+
+      const result = await classifier.classify('кожного дня о 7:00 протягом двох тижнів', asked);
+
+      expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+      expect(result.items[0].reminder?.recurrence).not.toHaveProperty('until');
+      expect(result.items[0].reminder?.recurrence).not.toHaveProperty('forDays');
+    }
+  });
+
+  it('forces confidence below CONFIDENCE_ASK when until is before the first occurrence', async () => {
+    replyWithReminder(0.95, daily({ until: '2026-11-05' }));
+
+    const result = await classifier.classify('кожного дня о 7:00 до 5 листопада', asked);
+
+    expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+  });
+
+  it('forces confidence below CONFIDENCE_ASK when both forDays and until were given', async () => {
+    replyWithReminder(0.95, daily({ forDays: 14, until: '2026-11-30' }));
+
+    const result = await classifier.classify('кожного дня о 7:00 протягом 14 днів', asked);
+
+    expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+  });
+
+  // acceptance: birthday-unchanged
+  it('leaves a birthday with no end unchanged', async () => {
+    replyWithReminder(0.95, {
+      title: "Олена's birthday",
+      hasTimeOfDay: false,
+      recurrence: { freq: 'yearly', month: 6, day: 12, evidence: 'день народження' },
+    });
+
+    const result = await classifier.classify('У Олени день народження 12 червня', later);
+
+    expect(result.items[0].confidence).toBe(0.95);
+    expect(result.items[0].reminder?.recurrence).not.toHaveProperty('until');
+  });
+});

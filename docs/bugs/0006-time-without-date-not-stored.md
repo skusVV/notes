@@ -1,6 +1,6 @@
 ---
 id: 0006-time-without-date-not-stored
-state: READY
+state: IN-PROGRESS
 severity: medium
 attempt: 0
 max_attempts: 3

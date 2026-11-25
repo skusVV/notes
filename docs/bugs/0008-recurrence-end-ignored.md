@@ -1,6 +1,6 @@
 ---
 id: 0008-recurrence-end-ignored
-state: IN-TESTING
+state: VERIFIED
 severity: high
 attempt: 1
 max_attempts: 3
@@ -55,6 +55,23 @@ failures:
 ---
 
 # BUG-0008 - A repeat's end ("протягом 14 днів", "до 1 грудня") is dropped; it fires forever
+
+> **VERIFIED 2026-11-25, attempt 2** (spec-verifier) on telegram-echo-bot-test, testing = 13124eb
+> (fix/0008 + lane commit; its src/test are byte-identical to attempt 1's 46066b0). Proven live at
+> 15:17:07 UTC by the repro on spare user 900000005 (now 2026-11-25T10:00+02:00, 'Щодня о 9 вечора до
+> 1 грудня ...'): stored recurrence `until: '2026-12-01'`, reply `... щодня о 21:00 до 1 грудня`,
+> which pre-fix code cannot produce. All 7 criteria pass: health 200 {"status":"ok"};
+> unit-stops-at-until (npm test 411/411; the 3 regression files at the tests-only commit e922261
+> fail 16 tests on the pre-fix source, among them 'stops a daily rule after its inclusive until
+> date' and 'writes nothing after the last occurrence'); repro-fixed (900000001, reply
+> `Нагадування збережено: потрібно пройти сертифікацію` / `Завтра о 7:00` / `Повторюється: щодня о
+> 7:00 до 19 листопада`, one reminder {daily, 07:00, Europe/Kyiv, until 2026-11-19}, one scheduled
+> notification 2026-11-06T07:00:00+02:00); stops-after-end (amended: sweeps 1-14 at
+> 2026-11-20T06:45+02:00 each reflected one `Нагадування: потрібно пройти сертифікацію`, 6 through 19
+> листопада, sweep 15 reflected `[]`, total 14; /export then 14 notifications 2026-11-06 to
+> 2026-11-19 07:00+02:00, all `sent`, none later, none `scheduled`); until-date (900000002: {daily,
+> 21:00, until 2026-12-01}); no-end-unchanged (900000003: {daily, 08:00}, no until);
+> birthday-unchanged (900000004: {yearly, month 6, day 12}, no until). Security pass PASS (A-G).
 
 ## Symptom
 

@@ -1,6 +1,6 @@
 ---
 id: 0007-day-without-time-with-nudges-not-stored
-state: IN-TESTING
+state: VERIFIED
 severity: medium
 attempt: 0
 max_attempts: 3
@@ -26,6 +26,24 @@ failures: []
 ---
 
 # BUG-0007 - A reminder with a day but no clock time is refused even when the nudge times are explicit
+
+> **VERIFIED 2026-11-25** (spec-verifier) on telegram-echo-bot-test, live revision 900a47f
+> (fix/0007 + lane commit). The test allowlist has no spare synthetic id (900000000 and
+> 900000008-11 are refused), so the deploy was proven live by polling the day-only-with-nudge
+> message on its own user 900000002: attempts 1-3 (14:41:11-14:42:40 UTC) got the pre-fix
+> `(0.49)` clarify reply and left the export empty; attempt 4 (14:43:26 UTC) stored an all-day
+> one-off (`allDay: true`, eventAt 2026-11-27T23:59:00+02:00) with the new `Нагадаю:` line, which
+> pre-fix code cannot produce. That POST is the counted one for day-only-with-nudge. 900000001 was
+> first written after the flip. All 8 criteria pass: health 200 {"status":"ok"}; repro-fixed (one
+> all-day one-off, no recurrence, notifications 2026-11-27T19:00:00+02:00 and
+> 2026-11-28T06:00:00+02:00, reply `Нагадування збережено: Здавати аналізи` / `28 листопада` /
+> `Нагадаю: післязавтра о 19:00, 28 листопада о 6:00`); day-only-with-nudge (one notification
+> 2026-11-26T19:00:00+02:00, allDay true, no `23:59` in the reply); bare-hour-nearest
+> 2026-11-25T20:00:00+02:00; meridiem-respected 2026-11-26T08:00:00+02:00; no-time-no-nudge-still-asks
+> (0.49 clarify, 0 reminders); bug0006-unchanged 2026-11-25T07:30:00+02:00 (each exactly one
+> reminder); unit-regression (npm test 389/389; run on the pre-fix source, the fix branch's tests
+> fail 13 tests covering (a), (c) and (d); (b) is a no-regression guard that pre-fix code already
+> met). Security pass PASS.
 
 > **READY 2026-11-25** (owner, after BUG-0006 shipped: "Ця проблема не пофікшена ... подивись, в
 > чому там проблема"; standing go-ahead to fix without asking). Prod log 14:18 UTC:

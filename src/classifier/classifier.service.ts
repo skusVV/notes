@@ -13,10 +13,13 @@ import {
 import {
   DEFAULT_RECURRENCE_HOUR,
   RECURRENCE_FREQ,
+  Recurrence,
   WEEKDAYS,
+  nextOccurrence,
   nextOccurrenceAfter,
   normalizeAtLocal,
   normalizeRecurrence,
+  untilFromForDays,
 } from '../reminders/recurrence';
 import {
   Classification,
@@ -189,6 +192,22 @@ const RESPONSE_SCHEMA: Schema = {
                       `named no time - the bot then uses ${DEFAULT_RECURRENCE_HOUR}:00 local. Do ` +
                       'not invent an hour.',
                   },
+                  until: {
+                    type: Type.STRING,
+                    description:
+                      'The last local date the repeat may fire on, as "YYYY-MM-DD", ONLY when the ' +
+                      'message names an end date ("до 1 грудня", "until December 1"), resolved ' +
+                      'against the current local time. Inclusive. OMIT when no end was stated - ' +
+                      'never infer one. Never together with forDays.',
+                  },
+                  forDays: {
+                    type: Type.INTEGER,
+                    minimum: 1,
+                    description:
+                      'The stated term in days, ONLY when the message names one ("протягом 14 ' +
+                      'днів", "for two weeks" = 14). Do not compute a date from it - the bot does. ' +
+                      'OMIT when no term was stated - never infer one. Never together with until.',
+                  },
                   evidence: {
                     type: Type.STRING,
                     description:
@@ -199,7 +218,16 @@ const RESPONSE_SCHEMA: Schema = {
                   },
                 },
                 required: ['freq', 'evidence'],
-                propertyOrdering: ['freq', 'month', 'day', 'weekday', 'atLocal', 'evidence'],
+                propertyOrdering: [
+                  'freq',
+                  'month',
+                  'day',
+                  'weekday',
+                  'atLocal',
+                  'until',
+                  'forDays',
+                  'evidence',
+                ],
               },
             },
             required: ['title', 'hasTimeOfDay'],
@@ -443,11 +471,22 @@ export class ClassifierService {
       '- Every recurrence must carry `evidence`: the exact words, quoted from the message, that say',
       '  it repeats. This is checked against the message text - a quote that is not really there',
       '  gets the whole recurrence discarded, so do not fill it with a paraphrase.',
+      '- An END of the repeat goes in exactly one of two fields, and ONLY when the message states',
+      '  one. A term ("протягом 14 днів", "на наступні 2 тижні", "for two weeks") -> forDays, an',
+      '  integer number of days (weeks x 7); do NOT turn it into a date, the bot does. An end date',
+      '  ("до 1 грудня", "until December 1") -> until, that local date as "YYYY-MM-DD", resolved',
+      '  against the current local time above (the next such date not before today). Never both.',
+      '- OMIT both forDays and until unless the message itself states an end. A repeat with no',
+      '  stated end has no end - never infer a term from context.',
       'Examples:',
       '- "Bob has a birthday on June 12" -> reminder, title "Bob\'s birthday",',
       '  recurrence = {freq: yearly, month: 6, day: 12}, no eventAt, no atLocal.',
       '- "Take out the trash every Monday at 8am" -> recurrence = {freq: weekly, weekday: monday,',
       '  atLocal: "08:00"}, no eventAt.',
+      '- "for the next 14 days every day at 7 remind me to study" -> recurrence = {freq: daily,',
+      '  atLocal: "07:00", forDays: 14}, no until, no eventAt.',
+      '- now = 2026-11-25: "every day at 9pm until December 1 remind me to take vitamins" ->',
+      '  recurrence = {freq: daily, atLocal: "21:00", until: "2026-12-01"}, no forDays, no eventAt.',
       '',
       'Symptoms. A symptom is a health event the user is experiencing. Fill the symptom object.',
       'Rules for its fields:',
@@ -619,6 +658,7 @@ export class ClassifierService {
     const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
 
     const item: Classification = { intent, confidence, summary };
+    let endUnusable = false;
 
     const reminder = raw.reminder as Record<string, unknown> | undefined;
     if (intent === 'reminder' && typeof reminder?.title === 'string' && reminder.title.trim()) {
@@ -628,9 +668,18 @@ export class ClassifierService {
       // invented repeat fires forever at a time the user never named. Likewise a recurrence whose
       // `evidence` is not real text from the message - "sounds routine" is not the same as
       // "the user asked for it daily", and only the latter should fire forever.
-      const recurrence = normalizeRecurrence(reminder.recurrence, timezone, original);
-      if (reminder.recurrence && !recurrence) {
+      const normalized = normalizeRecurrence(reminder.recurrence, timezone, original);
+      if (reminder.recurrence && !normalized) {
         this.logger.warn('Classifier recurrence rejected: unresolvable or not quoted from the message');
+      }
+      const end = normalized
+        ? resolveRecurrenceEnd(normalized, reminder.recurrence as Record<string, unknown>, now)
+        : undefined;
+      const recurrence = end?.recurrence;
+      if (end?.unusable) {
+        // A stated end that cannot be kept must not silently become "forever": the bot asks.
+        this.logger.warn('Classifier recurrence end rejected: unusable forDays or until');
+        endUnusable = true;
       }
       item.reminder = {
         title: reminder.title.trim(),
@@ -734,7 +783,10 @@ export class ClassifierService {
         (!item.reminder.recurrence &&
           (!(hasTimeOfDay || item.reminder.allDay === true) ||
             !normalizeEventAt(item.reminder.eventAt, now))));
-    const needsPayload = reminderUnresolved || (intent === 'symptom' && !item.symptom);
+    const needsPayload =
+      reminderUnresolved ||
+      (intent === 'reminder' && endUnusable) ||
+      (intent === 'symptom' && !item.symptom);
     if (needsPayload) {
       this.logger.warn(`Classifier returned ${intent} without a usable payload`);
       item.confidence = Math.min(item.confidence, CONFIDENCE_ASK - 0.01);
@@ -742,6 +794,45 @@ export class ClassifierService {
 
     return item;
   }
+}
+
+/**
+ * Applies the model's stated end of a repeat (BUG-0008) to an already validated rule. `until` was
+ * kept by normalizeRecurrence when it is a real date; `forDays` is converted here, by code, into an
+ * inclusive `until` counted from the first occurrence, and is never carried on. `unusable` means an
+ * end WAS stated but cannot be kept - a malformed `until`, a `forDays` that is not a positive
+ * integer, both at once, or an end before the first occurrence - and the caller must ask rather
+ * than store the rule as one that never ends.
+ */
+function resolveRecurrenceEnd(
+  recurrence: Recurrence,
+  raw: Record<string, unknown>,
+  now: Date,
+): { recurrence: Recurrence; unusable: boolean } {
+  const statedUntil = isStated(raw.until);
+  const statedForDays = isStated(raw.forDays);
+  if (!statedUntil && !statedForDays) {
+    return { recurrence, unusable: false };
+  }
+
+  const open: Recurrence = { ...recurrence };
+  delete open.until;
+  if (statedUntil && statedForDays) {
+    return { recurrence: open, unusable: true };
+  }
+
+  const until = statedForDays ? untilFromForDays(open, raw.forDays, now) : recurrence.until;
+  if (!until) {
+    return { recurrence: open, unusable: true };
+  }
+
+  const ended: Recurrence = { ...open, until };
+  return { recurrence: ended, unusable: nextOccurrence(ended, now) === undefined };
+}
+
+/** A field the model actually filled in - not absent, not null, not an empty string. */
+function isStated(value: unknown): boolean {
+  return value !== undefined && value !== null && !(typeof value === 'string' && !value.trim());
 }
 
 /** responseMimeType should prevent fences, but a stray ```json costs one cheap guard. */

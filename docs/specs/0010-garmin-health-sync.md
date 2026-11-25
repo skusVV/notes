@@ -1,6 +1,6 @@
 ---
 id: 0010-garmin-health-sync
-state: DRAFT
+state: DONE
 attempt: 0
 max_attempts: 3
 branch: feat/0010-garmin-health-sync
@@ -10,6 +10,14 @@ failures: []
 ---
 
 # 0010 - Garmin health sync (official Personal API ingester)
+
+> **DONE 2026-11-25.** Синк працює щодня в ранковій джобі `morning-run` ([0022](0022-morning-run.md)).
+> Запуск 2026-11-25 пройшов з першої спроби: 6 запитів, сон за сьогодні є. Його дані читає
+> [0018](0018-digest-garmin-sections.md). Рішення власника: попередження про кінець дії ключа
+> (`GARMIN_KEY_EXPIRES_ON`) свідомо не вмикаємо. Достатньо алерту про відхилений ключ, а якщо дані
+> Garmin зникнуть зі звіту, власник подебажить сам. Ручні перевірки алертів (`alert-once-on-rejected-key`,
+> `recovery-note`, `expiry-heads-up-once`) на живому ключі не проганялися. Звіт від збою Garmin не
+> залежить: він запитується у `finally`.
 
 > **0015 (Apple Health) видалено 2026-11-02:** власник визнав його неактуальним. Garmin - єдине
 > джерело здоров'я, конфлікту немає.

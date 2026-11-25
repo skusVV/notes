@@ -1,6 +1,6 @@
 ---
 id: 0007-day-without-time-with-nudges-not-stored
-state: VERIFIED
+state: DONE
 severity: medium
 attempt: 0
 max_attempts: 3

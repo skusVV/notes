@@ -1,6 +1,6 @@
 ---
 id: 0008-recurrence-end-ignored
-state: IMPLEMENTED
+state: IN-TESTING
 severity: high
 attempt: 0
 max_attempts: 3

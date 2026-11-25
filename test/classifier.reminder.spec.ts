@@ -413,3 +413,212 @@ describe('ClassifierService time without a date (BUG-0006)', () => {
     expect(result.items[0].confidence).toBe(0.95);
   });
 });
+
+// BUG-0007: a day with no clock time ("в суботу вранці") plus explicit nudge times is actionable -
+// stored all-day on that date with exactly the requested nudges - and a bare hour with no
+// half-of-day word ("о 8") is whichever of H:00 and (H+12):00 comes first.
+describe('ClassifierService day without a time, with nudges (BUG-0007)', () => {
+  const kyivAfternoon: ClassifierContext = {
+    timezone: 'Europe/Kyiv',
+    now: '2026-11-25T16:18:00+02:00',
+  };
+  let classifier: ClassifierService;
+
+  beforeEach(() => {
+    mockGenerateContent.mockReset();
+    classifier = makeClassifier();
+  });
+
+  // acceptance: unit-regression (a) / repro-fixed - the exact reply the real model gave
+  it('keeps confidence and stores all-day when a day and explicit nudges were named', async () => {
+    replyWithReminder(0.95, {
+      title: 'здати аналізи',
+      hasTimeOfDay: false,
+      dateStated: true,
+      eventDate: '2026-11-28',
+      notifyAt: ['evening_before', '2026-11-28T06:00:00+02:00'],
+    });
+
+    const result = await classifier.classify(
+      "В суботу вранці я йду здавати аналізи. Поставив мені нагадування ремайндер на п'ятницю вечір та на суботу 6 ранку.",
+      kyivAfternoon,
+    );
+
+    expect(result.items[0].confidence).toBe(0.95);
+    expect(result.items[0].confidence).toBeGreaterThanOrEqual(CONFIDENCE_ASK);
+    expect(result.items[0].reminder?.allDay).toBe(true);
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-28T23:59:00+02:00');
+    expect(result.items[0].reminder?.notifyAt).toEqual([
+      'evening_before',
+      '2026-11-28T06:00:00+02:00',
+    ]);
+    expect(result.items[0].reminder?.recurrence).toBeUndefined();
+  });
+
+  // acceptance: unit-regression (b) / no-time-no-nudge-still-asks - invent-nothing
+  it('stays below CONFIDENCE_ASK for a day with no time and no nudge', async () => {
+    replyWithReminder(0.95, {
+      title: 'здати аналізи',
+      hasTimeOfDay: false,
+      dateStated: true,
+      eventDate: '2026-11-28',
+    });
+
+    const result = await classifier.classify('В суботу я йду здавати аналізи', kyivAfternoon);
+
+    expect(result.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+    expect(result.items[0].reminder).not.toHaveProperty('allDay');
+  });
+
+  // at_event is not a usable nudge for an event with no time, and a nudge already past is none.
+  it('stays below CONFIDENCE_ASK when the only nudges are at_event or already past', async () => {
+    replyWithReminder(0.95, {
+      title: 'a',
+      hasTimeOfDay: false,
+      eventDate: '2026-11-28',
+      notifyAt: ['at_event'],
+    });
+    replyWithReminder(0.95, {
+      title: 'b',
+      hasTimeOfDay: false,
+      eventDate: '2026-11-28',
+      notifyAt: ['2026-11-25T09:00:00+02:00'],
+    });
+
+    const atEvent = await classifier.classify('a', kyivAfternoon);
+    const past = await classifier.classify('b', kyivAfternoon);
+
+    expect(atEvent.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+    expect(atEvent.items[0].reminder).not.toHaveProperty('allDay');
+    expect(past.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+    expect(past.items[0].reminder).not.toHaveProperty('allDay');
+  });
+
+  // Only the resolvable nudges are kept; an unusable one is dropped, not repaired.
+  it('keeps only the nudges that resolve to a future instant', async () => {
+    replyWithReminder(0.95, {
+      title: 'стоматолог',
+      hasTimeOfDay: false,
+      eventDate: '2026-11-27',
+      notifyAt: ['evening_before', 'at_event', 'whenever'],
+    });
+
+    const result = await classifier.classify('У п’ятницю стоматолог, нагадай ввечері напередодні', kyivAfternoon);
+
+    expect(result.items[0].confidence).toBe(0.95);
+    expect(result.items[0].reminder?.allDay).toBe(true);
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-27T23:59:00+02:00');
+    expect(result.items[0].reminder?.notifyAt).toEqual(['evening_before']);
+  });
+
+  // A malformed or past eventDate is no all-day event.
+  it('ignores a malformed or past eventDate', async () => {
+    replyWithReminder(0.95, {
+      title: 'a',
+      hasTimeOfDay: false,
+      eventDate: '28.11.2026',
+      notifyAt: ['2026-11-26T09:00:00+02:00'],
+    });
+    replyWithReminder(0.95, {
+      title: 'b',
+      hasTimeOfDay: false,
+      eventDate: '2026-11-24',
+      notifyAt: ['2026-11-26T09:00:00+02:00'],
+    });
+
+    const malformed = await classifier.classify('a', kyivAfternoon);
+    const past = await classifier.classify('b', kyivAfternoon);
+
+    expect(malformed.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+    expect(malformed.items[0].reminder).not.toHaveProperty('allDay');
+    expect(past.items[0].confidence).toBeLessThan(CONFIDENCE_ASK);
+    expect(past.items[0].reminder).not.toHaveProperty('allDay');
+  });
+
+  // A stated clock time wins: eventDate is only for a day with no time.
+  it('does not make a timed reminder all-day', async () => {
+    replyWithReminder(0.95, {
+      title: 'вечеря',
+      eventAt: '2026-11-27T20:00:00+02:00',
+      hasTimeOfDay: true,
+      dateStated: true,
+      eventDate: '2026-11-27',
+      notifyAt: ['evening_before'],
+    });
+
+    const result = await classifier.classify('Вечеря в п’ятницю о 20:00', kyivAfternoon);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-27T20:00:00+02:00');
+    expect(result.items[0].reminder).not.toHaveProperty('allDay');
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // Recurring reminders are unchanged: eventDate takes no part in them.
+  it('leaves a recurring reminder untouched by eventDate', async () => {
+    replyWithReminder(0.95, {
+      title: "Bob's birthday",
+      hasTimeOfDay: false,
+      eventDate: '2026-12-14',
+      notifyAt: ['evening_before'],
+      recurrence: { freq: 'yearly', month: 12, day: 14, evidence: 'birthday on December 14' },
+    });
+
+    const result = await classifier.classify('Bob has a birthday on December 14', kyivAfternoon);
+
+    expect(result.items[0].reminder?.eventAt).toBeUndefined();
+    expect(result.items[0].reminder?.allDay).toBe(true);
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // acceptance: unit-regression (c) / bare-hour-nearest - "о 8" at 16:18 is today 20:00
+  it('resolves a bare hour with no half-of-day word to the nearest of H:00 and (H+12):00', async () => {
+    replyWithReminder(0.95, {
+      title: 'подзвонити Сергію',
+      hasTimeOfDay: true,
+      dateStated: false,
+      meridiemStated: false,
+      atLocal: '08:00',
+    });
+
+    const result = await classifier.classify('Нагадай мені о 8 подзвонити Сергію', kyivAfternoon);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-25T20:00:00+02:00');
+    expect(result.items[0].confidence).toBe(0.95);
+  });
+
+  // acceptance: meridiem-respected - "о 8 ранку" is tomorrow 08:00
+  it('respects a stated half of the day', async () => {
+    replyWithReminder(0.95, {
+      title: 'подзвонити Сергію',
+      hasTimeOfDay: true,
+      dateStated: false,
+      meridiemStated: true,
+      atLocal: '08:00',
+    });
+
+    const result = await classifier.classify('Нагадай мені о 8 ранку подзвонити Сергію', kyivAfternoon);
+
+    expect(result.items[0].reminder?.eventAt).toBe('2026-11-26T08:00:00+02:00');
+  });
+
+  // Invent-nothing: an absent meridiemStated is not a "no", and a morning bare hour still ahead is kept.
+  it('applies the 12-hour rule only on an explicit meridiemStated false', async () => {
+    replyWithReminder(0.95, { title: 'a', hasTimeOfDay: true, dateStated: false, atLocal: '08:00' });
+    replyWithReminder(0.95, {
+      title: 'b',
+      hasTimeOfDay: true,
+      dateStated: false,
+      meridiemStated: false,
+      atLocal: '07:30',
+    });
+
+    const absent = await classifier.classify('a', kyivAfternoon);
+    const early = await classifier.classify('b', {
+      timezone: 'Europe/Kyiv',
+      now: '2026-11-25T06:10:00+02:00',
+    });
+
+    expect(absent.items[0].reminder?.eventAt).toBe('2026-11-26T08:00:00+02:00');
+    expect(early.items[0].reminder?.eventAt).toBe('2026-11-25T07:30:00+02:00');
+  });
+});

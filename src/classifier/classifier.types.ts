@@ -41,8 +41,10 @@ export interface ReminderDraft {
    */
   recurrence?: Recurrence;
   /**
-   * True only for a recurring reminder whose message named no clock time (a birthday). Set by
-   * code from `hasTimeOfDay === false`, never by the model; absent otherwise, never `false`.
+   * True only when the message named no clock time: a recurring reminder (a birthday), set from
+   * `hasTimeOfDay === false`, or a one-off with a named day and explicit nudge times (BUG-0007),
+   * whose `eventAt` is then 23:59 on that day - a storage sentinel, never shown. Set by code,
+   * never by the model; absent otherwise, never `false`.
    */
   allDay?: boolean;
 }

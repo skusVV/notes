@@ -52,43 +52,62 @@ export function humanizeInstant(
   now: Date,
   options?: { capitalize?: boolean },
 ): string {
+  const target = parseInstant(iso);
+  if (!target) {
+    return iso;
+  }
+
+  const time = `${preposition(target.hour)} ${timeOfDay(target.hour, target.minute)}`;
+  const phrase = `${dayPhrase(target, now)} ${time}`;
+  const capitalize = options?.capitalize ?? true;
+  // A date form starts with a digit, so lower-casing its first character is a no-op; only the
+  // Сьогодні/Завтра/Післязавтра prefixes are affected, letting the phrase sit inside a sentence.
+  return capitalize ? phrase : phrase.charAt(0).toLowerCase() + phrase.slice(1);
+}
+
+/**
+ * An ISO instant rendered as its day only, relative to `now`: 'Сьогодні' | 'Завтра' |
+ * 'Післязавтра' | '28 листопада' | '5 січня 2027'. For an all-day event (BUG-0007), whose stored
+ * time is the 23:59 sentinel and must never be shown. Same day logic and same pass-through of an
+ * unresolvable value as {@link humanizeInstant}.
+ */
+export function humanizeDay(iso: string, now: Date): string {
+  const target = parseInstant(iso);
+  return target ? dayPhrase(target, now) : iso;
+}
+
+/** The instant in its own offset, or undefined when it is empty, unparseable or offset-less. */
+function parseInstant(iso: string): DateTime | undefined {
   const value = iso?.trim();
   if (!value || !HAS_OFFSET.test(value)) {
-    return iso;
+    return undefined;
   }
 
   const target = DateTime.fromISO(value, { setZone: true });
-  if (!target.isValid) {
-    return iso;
-  }
+  return target.isValid ? target : undefined;
+}
 
+/** The capitalised day part shared by humanizeInstant and humanizeDay. */
+function dayPhrase(target: DateTime, now: Date): string {
   // Read "now" in the value's own zone, so "today" is decided the way the user meant it.
   const nowInZone = DateTime.fromJSDate(now).setZone(target.zone);
   const dayDiff = Math.round(
     target.startOf('day').diff(nowInZone.startOf('day'), 'days').days,
   );
 
-  const time = `${preposition(target.hour)} ${timeOfDay(target.hour, target.minute)}`;
-
-  let prefix: string;
   if (dayDiff === 0) {
-    prefix = 'Сьогодні';
-  } else if (dayDiff === 1) {
-    prefix = 'Завтра';
-  } else if (dayDiff === 2) {
-    prefix = 'Післязавтра';
-  } else {
-    // Everything else - including a negative difference (a late delivery) - is the date form. The
-    // year is shown only when it differs from now's year in this same zone.
-    const date = `${target.day} ${MONTHS_GENITIVE[target.month - 1]}`;
-    prefix = target.year === nowInZone.year ? date : `${date} ${target.year}`;
+    return 'Сьогодні';
   }
-
-  const phrase = `${prefix} ${time}`;
-  const capitalize = options?.capitalize ?? true;
-  // A date form starts with a digit, so lower-casing its first character is a no-op; only the
-  // Сьогодні/Завтра/Післязавтра prefixes are affected, letting the phrase sit inside a sentence.
-  return capitalize ? phrase : phrase.charAt(0).toLowerCase() + phrase.slice(1);
+  if (dayDiff === 1) {
+    return 'Завтра';
+  }
+  if (dayDiff === 2) {
+    return 'Післязавтра';
+  }
+  // Everything else - including a negative difference (a late delivery) - is the date form. The
+  // year is shown only when it differs from now's year in this same zone.
+  const date = `${target.day} ${MONTHS_GENITIVE[target.month - 1]}`;
+  return target.year === nowInZone.year ? date : `${date} ${target.year}`;
 }
 
 /** 'HH:mm' (or 'H:mm') wall-clock -> 'о 20:00' | 'об 11:00'. Input passed through if it does not match. */

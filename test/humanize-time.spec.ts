@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { humanizeInstant, humanizeTimeOfDay } from '../src/reminders/humanize-time';
+import { humanizeDay, humanizeInstant, humanizeTimeOfDay } from '../src/reminders/humanize-time';
 
 // The pinned "now" the 0008 acceptance criteria use: 2026-09-21, on summer time (+03:00).
 const NOW = new Date('2026-09-21T08:00:00+03:00');
@@ -69,5 +69,38 @@ describe('humanizeTimeOfDay', () => {
     expect(humanizeTimeOfDay('08:00')).toBe('о 8:00');
     expect(humanizeTimeOfDay('20:00')).toBe('о 20:00');
     expect(humanizeTimeOfDay('abc')).toBe('abc');
+  });
+});
+
+// BUG-0007: an all-day event is shown as a day only - its stored 23:59 is a sentinel, never a time.
+describe('humanizeDay', () => {
+  const AFTERNOON = new Date('2026-11-25T16:18:00+02:00');
+
+  it('renders the three relative-day forms with no clock time', () => {
+    expect(humanizeDay('2026-11-25T23:59:00+02:00', AFTERNOON)).toBe('Сьогодні');
+    expect(humanizeDay('2026-11-26T23:59:00+02:00', AFTERNOON)).toBe('Завтра');
+    expect(humanizeDay('2026-11-27T23:59:00+02:00', AFTERNOON)).toBe('Післязавтра');
+  });
+
+  it('renders the date form, with the year only when it differs from now', () => {
+    expect(humanizeDay('2026-11-28T23:59:00+02:00', AFTERNOON)).toBe('28 листопада');
+    expect(humanizeDay('2027-01-05T23:59:00+02:00', AFTERNOON)).toBe('5 січня 2027');
+  });
+
+  it('decides the day in the value’s own zone, not the server’s', () => {
+    // 23:59 in Kyiv is already the next day in UTC; it must still read as that Kyiv day.
+    expect(humanizeDay('2026-11-26T23:59:00+02:00', new Date('2026-11-25T23:30:00+02:00'))).toBe(
+      'Завтра',
+    );
+  });
+
+  it('never shows the 23:59 sentinel', () => {
+    expect(humanizeDay('2026-11-28T23:59:00+02:00', AFTERNOON)).not.toContain('23:59');
+  });
+
+  it('passes an unparseable or offset-less value through unchanged', () => {
+    expect(humanizeDay('', AFTERNOON)).toBe('');
+    expect(humanizeDay('not a time', AFTERNOON)).toBe('not a time');
+    expect(humanizeDay('2026-11-28T23:59:00', AFTERNOON)).toBe('2026-11-28T23:59:00');
   });
 });

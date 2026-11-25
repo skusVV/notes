@@ -16,7 +16,8 @@ import { ClockService } from '../clock/clock.service';
 import { DigestExport, DigestSettingsService } from '../digest/digest-settings.service';
 import { NotesService } from '../notes/notes.service';
 import { normalizeEventAt } from '../reminders/event-at';
-import { humanizeInstant } from '../reminders/humanize-time';
+import { humanizeDay, humanizeInstant } from '../reminders/humanize-time';
+import { resolveNotifyTimes } from '../reminders/notify-times';
 import { describeRecurrence, nextOccurrence } from '../reminders/recurrence';
 import {
   DueNotification,
@@ -613,7 +614,12 @@ export class TelegramService {
   async sendReminder(notification: DueNotification, now: Date, sink?: string[]): Promise<void> {
     const lines = [`Нагадування: ${notification.title}`];
     if (notification.eventAt) {
-      lines.push(humanizeInstant(notification.eventAt, now));
+      // An all-day event's stored 23:59 is a sentinel, not a time the user named: show the day only.
+      lines.push(
+        notification.allDay
+          ? humanizeDay(notification.eventAt, now)
+          : humanizeInstant(notification.eventAt, now),
+      );
     }
 
     await this.sendMessage(
@@ -1256,6 +1262,21 @@ export class TelegramService {
       const resolved = reminder.recurrence
         ? (nextOccurrence(reminder.recurrence, now) ?? '')
         : (normalizeEventAt(reminder.eventAt, now) ?? reminder.eventAt ?? '');
+      // An all-day one-off (BUG-0007) names its day, never the 23:59 sentinel, and then the nudges
+      // that were stored - the same resolution create() used, so the reply matches the store.
+      if (!reminder.recurrence && reminder.allDay === true) {
+        const nudges = resolveNotifyTimes(resolved, reminder.notifyAt, now).map((at) =>
+          humanizeInstant(at, now, { capitalize: false }),
+        );
+        return {
+          text: [
+            `Нагадування збережено: ${reminder.title}`,
+            humanizeDay(resolved, now),
+            `Нагадаю: ${nudges.join(', ')}`,
+          ].join('\n'),
+          stored: true,
+        };
+      }
       const lines = [`Нагадування збережено: ${reminder.title}`, humanizeInstant(resolved, now)];
       if (reminder.recurrence) {
         lines.push(`Повторюється: ${describeRecurrence(reminder.recurrence)}`);
@@ -1407,7 +1428,15 @@ export class TelegramService {
     }
 
     const details: string[] = [`Нагадування: ${reminder.title}`];
-    details.push(reminder.eventAt ? humanizeInstant(reminder.eventAt, now) : 'Час не вказано');
+    // An all-day one-off's eventAt is the 23:59 sentinel, so only its day is shown (BUG-0007).
+    const allDayOneOff = !reminder.recurrence && reminder.allDay === true;
+    details.push(
+      reminder.eventAt
+        ? allDayOneOff
+          ? humanizeDay(reminder.eventAt, now)
+          : humanizeInstant(reminder.eventAt, now)
+        : 'Час не вказано',
+    );
     details.push(
       reminder.leadMinutes === undefined
         ? 'Час попередження не вказано, я перепитаю'

@@ -3,7 +3,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DateTime } from 'luxon';
 import { normalizeEventAt } from '../reminders/event-at';
-import { EVENING_HOUR, MORNING_HOUR, RELATIVE_NOTIFY } from '../reminders/notify-times';
+import {
+  EVENING_HOUR,
+  MORNING_HOUR,
+  RELATIVE_NOTIFY,
+  RelativeNotify,
+  resolveRelativeNotify,
+} from '../reminders/notify-times';
 import {
   DEFAULT_RECURRENCE_HOUR,
   RECURRENCE_FREQ,
@@ -110,6 +116,22 @@ const RESPONSE_SCHEMA: Schema = {
                   '"tomorrow", "Thursday", "on the 25th", "сьогодні", "завтра"). false when it ' +
                   'gives only a clock time with no day at all ("о 5", "at 7:30").',
               },
+              meridiemStated: {
+                type: Type.BOOLEAN,
+                description:
+                  'Only with atLocal. true when the message says which half of the day the ' +
+                  'clock time is in ("ранку", "вечора", "дня", "ночі", "am", "pm", "morning", ' +
+                  '"evening") or uses a 24-hour time 13-23 or 00. false for a bare hour 1-12 ' +
+                  '("о 8", "at 5").',
+              },
+              eventDate: {
+                type: Type.STRING,
+                description:
+                  'The local date of the event as "YYYY-MM-DD", resolved from the current local ' +
+                  'time, ONLY when the message names a day but NO clock time for the event ' +
+                  '("в суботу вранці", "on Friday"). Omit when a clock time was stated (use ' +
+                  'eventAt) or no day was named.',
+              },
               notifyAt: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
@@ -187,6 +209,8 @@ const RESPONSE_SCHEMA: Schema = {
               'hasTimeOfDay',
               'atLocal',
               'dateStated',
+              'meridiemStated',
+              'eventDate',
               'notifyAt',
               'leadMinutes',
               'recurrence',
@@ -622,7 +646,42 @@ export class ClassifierService {
       // part a small model gets wrong (today vs tomorrow), and this one has a single answer.
       const atLocal = normalizeAtLocal(reminder.atLocal);
       if (!recurrence && reminder.hasTimeOfDay === true && reminder.dateStated === false && atLocal) {
-        item.reminder.eventAt = nextOccurrenceAfter({ freq: 'daily', atLocal, timezone }, now);
+        // A bare hour 1-11 with no half-of-day word ("о 8") is whichever of H:00 and (H+12):00
+        // comes first - the model does not apply that rule reliably, so code does.
+        const [hour, minute] = atLocal.split(':').map(Number);
+        const candidates = [atLocal];
+        if (reminder.meridiemStated === false && hour >= 1 && hour <= 11) {
+          candidates.push(`${String(hour + 12).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
+        }
+        item.reminder.eventAt = candidates
+          .map((at) => nextOccurrenceAfter({ freq: 'daily', atLocal: at, timezone }, now))
+          .filter((v): v is string => !!v)
+          .sort((a, b) => DateTime.fromISO(a).toMillis() - DateTime.fromISO(b).toMillis())[0];
+      }
+      // A day with no clock time ("в суботу вранці") plus explicit nudge times ("на п'ятницю
+      // вечір та на суботу 6 ранку") is actionable: the nudges are what the user asked for, and
+      // the event itself is stored all-day (end of that local day, never shown as a time). With
+      // no usable nudge it still goes to clarify - nothing here invents a time.
+      if (!recurrence && reminder.hasTimeOfDay !== true && typeof reminder.eventDate === 'string') {
+        const day = DateTime.fromISO(reminder.eventDate.trim(), { zone: timezone });
+        const eventAt = day.isValid && /^\d{4}-\d{2}-\d{2}$/.test(reminder.eventDate.trim())
+          ? normalizeEventAt(day.set({ hour: 23, minute: 59, second: 0, millisecond: 0 }).toISO() ?? undefined, now)
+          : undefined;
+        const nudges = eventAt
+          ? (item.reminder.notifyAt ?? []).filter((entry) => {
+              const value = entry.trim();
+              if (value === 'at_event') return false;
+              const candidate = (RELATIVE_NOTIFY as readonly string[]).includes(value)
+                ? resolveRelativeNotify(value as RelativeNotify, eventAt)
+                : value;
+              return !!normalizeEventAt(candidate, now);
+            })
+          : [];
+        if (eventAt && nudges.length > 0) {
+          item.reminder.eventAt = eventAt;
+          item.reminder.notifyAt = nudges;
+          item.reminder.allDay = true;
+        }
       }
       // A recurring reminder with no stated clock time is all-day: the 09:00 default is a nudge
       // time, not a time the user named. Only an explicit `false` counts - absent is not a "no".
@@ -673,7 +732,8 @@ export class ClassifierService {
       intent === 'reminder' &&
       (!item.reminder ||
         (!item.reminder.recurrence &&
-          (!hasTimeOfDay || !normalizeEventAt(item.reminder.eventAt, now))));
+          (!(hasTimeOfDay || item.reminder.allDay === true) ||
+            !normalizeEventAt(item.reminder.eventAt, now))));
     const needsPayload = reminderUnresolved || (intent === 'symptom' && !item.symptom);
     if (needsPayload) {
       this.logger.warn(`Classifier returned ${intent} without a usable payload`);

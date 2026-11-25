@@ -39,8 +39,9 @@ export interface ReminderDraftInput {
    */
   recurrence?: Recurrence;
   /**
-   * The classifier's "recurring, no clock time named" flag. Written only on the recurring path: a
-   * one-off with no time is never stored (it is asked about), so it can never carry the flag.
+   * The classifier's "no clock time named" flag. On the recurring path it marks a birthday-style
+   * reminder. On a one-off (BUG-0007) it marks a day with no time whose `eventAt` is the 23:59
+   * storage sentinel: such a reminder is stored only with the nudges the user asked for.
    */
   allDay?: boolean;
 }
@@ -96,6 +97,11 @@ export interface DueNotification {
    * one-off, which is exactly the "nothing to roll forward" signal.
    */
   recurrence?: Recurrence;
+  /**
+   * True when the notification belongs to an all-day one-off (BUG-0007): its `eventAt` is the
+   * 23:59 sentinel, so the delivery names the day only. Absent or false otherwise.
+   */
+  allDay?: boolean;
 }
 
 /** One reminder whose event falls on a given local day, as the digest reads it. */
@@ -110,7 +116,8 @@ export interface DayReminder {
   status: string;
   /**
    * True only when the stored reminder says so (`allDay: true`), which `create` writes for a
-   * recurring reminder that named no clock time. Absent reads as false rather than being guessed
+   * reminder that named no clock time (recurring, or a one-off with explicit nudges). Absent reads
+   * as false rather than being guessed
    * from the time: a 09:00 the user named looks the same as the default.
    */
   allDay: boolean;
@@ -159,6 +166,10 @@ export class RemindersService {
    * rule (so no `eventAt` is required, and a supplied one is ignored), it is written with **no**
    * `expireAt` so the TTL policy can never reap it, and it gets exactly **one** scheduled
    * notification - the next occurrence. The sweeper arms the one after it on delivery.
+   *
+   * An all-day one-off (`allDay` without a recurrence, BUG-0007) gets exactly the requested
+   * notifications: its `eventAt` is the 23:59 sentinel, so when none of them resolves there is no
+   * write (`undefined`), never the usual fallback of one nudge at `eventAt`.
    */
   async create(
     userId: number,
@@ -182,6 +193,16 @@ export class RemindersService {
       return undefined;
     }
 
+    const allDay = draft.allDay === true;
+    // A recurring reminder has exactly one notification: the next occurrence. Extra notify times
+    // would each need their own roll-forward, which v1 does not model.
+    const notifyAt = recurrence ? [eventAt] : resolveNotifyTimes(eventAt, draft.notifyAt, now);
+    // resolveNotifyTimes falls back to [eventAt] when nothing resolved; for an all-day one-off that
+    // would be a nudge at the 23:59 sentinel, a time the user never named - so do not store it.
+    if (!recurrence && allDay && notifyAt.length === 1 && notifyAt[0] === eventAt) {
+      return undefined;
+    }
+
     const eventInstant = DateTime.fromISO(eventAt, { setZone: true }).toJSDate();
     const document: DocumentData = {
       userId,
@@ -198,15 +219,12 @@ export class RemindersService {
       ...(recurrence
         ? { recurrence }
         : { expireAt: Timestamp.fromDate(computeExpireAt(eventAt)) }),
-      // Present only as `true`, and only on the recurring path; the roll-forward rewrites just
+      // Present only as `true`. On the recurring path the roll-forward rewrites just
       // eventAt/eventAtUtc, so the flag carries over to every later occurrence by itself.
-      ...(recurrence && draft.allDay === true ? { allDay: true } : {}),
+      ...(allDay ? { allDay: true } : {}),
     };
 
     const ref = db.collection('users').doc(String(userId)).collection('reminders').doc();
-    // A recurring reminder has exactly one notification: the next occurrence. Extra notify times
-    // would each need their own roll-forward, which v1 does not model.
-    const notifyAt = recurrence ? [eventAt] : resolveNotifyTimes(eventAt, draft.notifyAt, now);
 
     const batch = db.batch();
     batch.set(ref, document);
@@ -228,6 +246,9 @@ export class RemindersService {
         ...(recurrence
           ? { recurrence }
           : { expireAt: Timestamp.fromDate(computeExpireAt(atLocal)) }),
+        // Denormalised like title/eventAt, so the delivery knows to show the day only. One-off
+        // only: a recurring reminder's later occurrences are armed without it, and stay as they were.
+        ...(!recurrence && allDay ? { allDay: true } : {}),
       });
     }
     await batch.commit();
@@ -346,6 +367,7 @@ export class RemindersService {
         // silently become a reminder that stops recurring, and normalizeRecurrence is the one
         // place that decides what is resolvable.
         recurrence: normalizeRecurrence(data.recurrence, recurrenceZone(data.recurrence)),
+        allDay: data.allDay === true,
       };
     });
   }

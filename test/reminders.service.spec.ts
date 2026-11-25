@@ -267,20 +267,118 @@ describe('RemindersService.create for a recurring reminder', () => {
   });
 });
 
-describe('RemindersService.create allDay on a one-off', () => {
-  // A one-off is never all-day: the flag is honoured only on the recurring path.
-  it('ignores allDay on a one-off draft', async () => {
+describe('RemindersService.create allDay on a one-off (BUG-0007)', () => {
+  const AFTERNOON = new Date('2026-11-25T16:18:00+02:00');
+  const ALL_DAY_AT = '2026-11-28T23:59:00+02:00';
+
+  // acceptance: unit-regression (d) / repro-fixed - allDay is written, and only the requested
+  // nudges: the 23:59 eventAt is a storage sentinel and never gets a notification of its own.
+  it('writes allDay: true and only the requested notifications, never one at eventAt', async () => {
     const store = fakeFirestore();
 
-    await store.service.create(
+    const id = await store.service.create(
       USER,
       CHAT,
-      { title: 'pay rent', eventAt: EVENT_AT, allDay: true },
-      'rent',
-      NOW,
+      {
+        title: 'здати аналізи',
+        eventAt: ALL_DAY_AT,
+        notifyAt: ['evening_before', '2026-11-28T06:00:00+02:00'],
+        allDay: true,
+      },
+      'В суботу вранці я йду здавати аналізи',
+      AFTERNOON,
     );
 
+    expect(id).toBeDefined();
+    const doc = reminder(store.writes);
+    expect(doc.allDay).toBe(true);
+    expect(doc.eventAt).toBe(ALL_DAY_AT);
+    expect(doc).not.toHaveProperty('recurrence');
+    expect(doc.expireAt).toBeInstanceOf(Timestamp);
+
+    const nudges = notifications(store.writes);
+    expect(nudges.map((n) => n.atLocal)).toEqual([
+      '2026-11-27T19:00:00+02:00',
+      '2026-11-28T06:00:00+02:00',
+    ]);
+    expect(nudges.map((n) => n.atLocal)).not.toContain(ALL_DAY_AT);
+    for (const nudge of nudges) {
+      expect(nudge.allDay).toBe(true);
+      expect(nudge.status).toBe('scheduled');
+    }
+  });
+
+  // Invent-nothing: with no requested nudge that resolves there is no write at all, instead of
+  // the usual fallback of one nudge at eventAt (which here would be the 23:59 sentinel).
+  it('writes nothing when no requested notify time resolves', async () => {
+    const none = fakeFirestore();
+    const past = fakeFirestore();
+
+    expect(
+      await none.service.create(USER, CHAT, { title: 'a', eventAt: ALL_DAY_AT, allDay: true }, 'a', AFTERNOON),
+    ).toBeUndefined();
+    expect(
+      await past.service.create(
+        USER,
+        CHAT,
+        { title: 'b', eventAt: ALL_DAY_AT, notifyAt: ['2026-11-25T09:00:00+02:00'], allDay: true },
+        'b',
+        AFTERNOON,
+      ),
+    ).toBeUndefined();
+
+    expect(none.writes).toHaveLength(0);
+    expect(past.writes).toHaveLength(0);
+  });
+
+  // A timed one-off is unchanged: no allDay anywhere.
+  it('writes no allDay field on a timed one-off', async () => {
+    const store = fakeFirestore();
+
+    await store.service.create(USER, CHAT, { title: 'pay rent', eventAt: EVENT_AT }, 'rent', NOW);
+
     expect(reminder(store.writes)).not.toHaveProperty('allDay');
+    for (const nudge of notifications(store.writes)) {
+      expect(nudge).not.toHaveProperty('allDay');
+    }
+  });
+});
+
+describe('RemindersService.findDue allDay (BUG-0007)', () => {
+  function dueStore(docs: Record<string, unknown>[]) {
+    const reminderRef = { id: 'reminder-1', parent: { parent: { id: String(USER) } } };
+    const db = {
+      collectionGroup: () => ({
+        where: () => ({
+          where: () => ({
+            get: async () => ({
+              docs: docs.map((data, index) => ({
+                id: `n${index}`,
+                ref: { parent: { parent: reminderRef } },
+                data: () => data,
+              })),
+            }),
+          }),
+        }),
+      }),
+    };
+    return new RemindersService({ db, available: true } as never);
+  }
+
+  it('reads allDay back from the notification, true only when stored as true', async () => {
+    const base = {
+      reminderId: 'reminder-1',
+      userId: USER,
+      chatId: CHAT,
+      title: 'здати аналізи',
+      eventAt: '2026-11-28T23:59:00+02:00',
+      atLocal: '2026-11-27T19:00:00+02:00',
+      status: 'scheduled',
+    };
+
+    const due = await dueStore([{ ...base, allDay: true }, base]).findDue(new Date('2026-11-27T19:30:00+02:00'));
+
+    expect(due.map((n) => n.allDay)).toEqual([true, false]);
   });
 });
 

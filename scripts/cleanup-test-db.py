@@ -9,7 +9,8 @@ start with 9000000 (the synthetic verifier users); the owner's data and the prod
 Usage:  T=$(gcloud auth print-access-token) python3 -I scripts/cleanup-test-db.py list|delete
 """
 import json, os, sys, urllib.request
-TOKEN = os.environ["T"]; DB = "test"  # never change this: production is "(default)"; PROJ = "notes-506213"
+TOKEN = os.environ["T"]; PROJ = "notes-506213"
+DB = "test"  # never change this: production is "(default)"
 BASE = f"https://firestore.googleapis.com/v1/projects/{PROJ}/databases/{DB}/documents"
 def call(method, url, body=None):
     req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,

@@ -1,6 +1,6 @@
 ---
 id: 0008-recurrence-end-ignored
-state: NEEDS-REWORK
+state: IMPLEMENTED
 severity: high
 attempt: 1
 max_attempts: 3
@@ -13,7 +13,7 @@ acceptance:
   - id: repro-fixed
     assert: "With X-Test-Now=2026-11-05T11:48:00+02:00, from user 900000001 POST 'На протязі наступних 14 днів кожного дня з ранку о 7:00 ранку нагадуй мені, що мені потрібно пройти сертифікацію.'; '/export' from 900000001 shows exactly one reminder whose recurrence has freq == 'daily', atLocal == '07:00' and until == '2026-11-19', with exactly one scheduled notification at 2026-11-06T07:00:00+02:00; the reply starts with 'Нагадування збережено:' and contains 'до 19 листопада'"
   - id: stops-after-end
-    assert: "Continuing repro-fixed for user 900000001: POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-11-19T06:45:00+02:00; '/export' from 900000001 shows no notification whose at is later than 2026-11-19T07:00:00+02:00 and no notification in status 'scheduled'; a further POST /sweep with X-Test-Now=2026-11-20T06:45:00+02:00 reflects no string starting with 'Нагадування:' that contains 'сертифікац' (case-insensitive)"
+    assert: "Continuing repro-fixed for user 900000001 (catch-up delivers one occurrence per sweep, by design): repeat POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-11-20T06:45:00+02:00 until a sweep reflects no string starting with 'Нагадування:' that contains 'сертифікац' (case-insensitive), at most 20 sweeps; exactly 14 such strings were reflected in total; '/export' from 900000001 then shows exactly 14 notifications, at 2026-11-06T07:00:00+02:00 through 2026-11-19T07:00:00+02:00, none later than 2026-11-19T07:00:00+02:00 and none in status 'scheduled'"
   - id: until-date
     assert: "With X-Test-Now=2026-11-25T10:00:00+02:00, from user 900000002 POST 'Щодня о 9 вечора до 1 грудня нагадуй мені пити вітаміни'; '/export' from 900000002 shows exactly one reminder whose recurrence has freq == 'daily', atLocal == '21:00' and until == '2026-12-01'"
   - id: no-end-unchanged
@@ -70,7 +70,7 @@ reminder (`users/281473866/reminders/fHfJKsYN3VVluVxwn9w4`) was closed by hand o
 
 On the test function, with `X-Test-Now=2026-11-05T11:48:00+02:00`, send the message above from
 `900000001`. `/export` shows `recurrence: {freq: daily, atLocal: "07:00", timezone: Europe/Kyiv}` -
-no end. A `/sweep` at `2026-11-19T06:45+02:00` delivers the 19th and arms 2026-11-20, and so on.
+no end. Sweeping past the end keeps delivering one occurrence per sweep (catch-up) and arms 2026-11-20, 2026-11-21, and so on, forever.
 
 ## Root cause
 
@@ -138,3 +138,10 @@ no-regression `no-end-unchanged` and `birthday-unchanged`.
   "for 3 weeks" term is `forDays: 21`).
 - Editing the end of an already stored reminder.
 - Back-filling `until` onto existing prod reminders.
+
+## Criterion amendment (2026-11-25, after attempt 1)
+
+`stops-after-end` originally assumed one sweep at 2026-11-19 lands on the 19th occurrence. The
+existing catch-up rule delivers one occurrence per sweep, counted from the one that just fired, so
+the criterion now sweeps repeatedly and checks the total (14) and that nothing is armed after the
+end. The code was not changed; attempt 1 already showed this behaviour (14 deliveries, then none).

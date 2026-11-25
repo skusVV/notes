@@ -1,6 +1,6 @@
 ---
 id: 0018-digest-garmin-sections
-state: IMPLEMENTED
+state: DONE
 attempt: 0
 max_attempts: 3
 branch: feat/0018-digest-garmin-sections
@@ -11,12 +11,10 @@ failures: []
 
 # 0018 - Ранковий звіт: розділи "Вчора" і "Сон і відновлення" (Garmin)
 
-> **DRAFT, delivery: manual.** Інтерв'ю з власником 2026-11-24 закрило відкриті питання (рішення
-> 7-9 нижче). Робиться **після [0022](0022-morning-run.md)**: станом на 2026-11-24 ingester
-> ніколи не працював щодня (лише один локальний запуск 2026-11-02), тож свіжих даних для цих
-> розділів поки немає. **Залежить від [0012](0012-morning-digest.md)** (збірка розділів,
-> `DigestSection`), **[0022](0022-morning-run.md)** (ранкова джоба) **і [0010](0010-garmin-health-sync.md)** (документи `health_daily` та `activities`
-> уже в Firestore). Обидва мають бути в `main`.
+> **DONE 2026-11-25, delivery: manual.** На проді з першого ранкового запуску `morning-run`:
+> 2026-11-25 о 07:00 за Києвом звіт власнику прийшов з обома розділами (`garmin-yesterday=3`,
+> `garmin-recovery=3` рядки). Власник підтвердив отримання. Залежить від
+> [0012](0012-morning-digest.md), [0022](0022-morning-run.md) і [0010](0010-garmin-health-sync.md).
 
 ## Context
 

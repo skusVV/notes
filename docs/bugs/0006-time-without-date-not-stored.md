@@ -1,6 +1,6 @@
 ---
 id: 0006-time-without-date-not-stored
-state: VERIFIED
+state: DONE
 severity: medium
 attempt: 0
 max_attempts: 3

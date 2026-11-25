@@ -54,3 +54,4 @@ loses nothing; `low` is cosmetic or only affects tests and tooling.
 | [0004-done-does-not-close-after-ignored-nudge](0004-done-does-not-close-after-ignored-nudge.md) | DONE | medium | Tapping Done does not close a reminder if an earlier nudge was left untapped. |
 | [0005-bot-token-in-error-logs](0005-bot-token-in-error-logs.md) | DONE | high | A failed Telegram call logs the bot token and the message text. |
 | [0006-time-without-date-not-stored](0006-time-without-date-not-stored.md) | DONE | medium | A reminder with a clock time but no day ("о 5") is not stored, or lands on the wrong day. |
+| [0007-day-without-time-with-nudges-not-stored](0007-day-without-time-with-nudges-not-stored.md) | READY | medium | A day with no clock time ("в суботу вранці") plus explicit nudge times is refused (0.49); a bare "о 8" lands on the wrong half of the day. |

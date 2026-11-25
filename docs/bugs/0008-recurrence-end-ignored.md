@@ -1,8 +1,8 @@
 ---
 id: 0008-recurrence-end-ignored
-state: IN-TESTING
+state: NEEDS-REWORK
 severity: high
-attempt: 0
+attempt: 1
 max_attempts: 3
 branch: fix/0008-recurrence-end-ignored
 acceptance:
@@ -20,7 +20,38 @@ acceptance:
     assert: "With X-Test-Now=2026-11-25T10:00:00+02:00, from user 900000003 POST 'Нагадуй мені щодня о 8 ранку робити зарядку'; '/export' from 900000003 shows exactly one reminder whose recurrence has freq == 'daily', atLocal == '08:00' and no until field"
   - id: birthday-unchanged
     assert: "With X-Test-Now=2026-11-25T10:00:00+02:00, from user 900000004 POST 'У Олени день народження 12 червня'; '/export' from 900000004 shows exactly one reminder whose recurrence has freq == 'yearly', month == 6, day == 12 and no until field"
-failures: []
+failures:
+  - attempt: 0
+    stage: verification
+    detail: >-
+      One criterion fails as written: stops-after-end. The fix itself works, but the criterion's single-sweep
+      setup cannot pass, so the owner needs to amend it. testing = 46066b0 (fix + lane commit) was proven
+      live at 15:00:43 UTC: 'Щодня о 9 вечора до 1 грудня ...' on spare user 900000006 stored recurrence
+      until '2026-12-01' and replied '... до 1 грудня', which only the fix can produce. PASS: health (GET /
+      200 {"status":"ok"}); unit-stops-at-until (npm test 411/411; on the tests-only commit e922261 the 16
+      new BUG-0008 tests fail, among them 'stops a daily rule after its inclusive until date' and 'writes
+      nothing after the last occurrence'); repro-fixed (900000001, now 2026-11-05T11:48+02:00: reply
+      'Нагадування збережено: потрібно пройти сертифікацію\nЗавтра о 7:00\nПовторюється: щодня о 7:00 до 19
+      листопада', one reminder {daily, 07:00, Europe/Kyiv, until 2026-11-19}, one scheduled notification at
+      2026-11-06T07:00:00+02:00); until-date (900000002: {daily, 21:00, until 2026-12-01});
+      no-end-unchanged (900000003: {daily, 08:00}, no until); birthday-unchanged (900000004: {yearly,
+      month 6, day 12}, no until). FAIL: stops-after-end. POST /sweep at 2026-11-19T06:45+02:00 reflected
+      'Нагадування: потрібно пройти сертифікацію\n6 листопада о 7:00'. After it, /export for 900000001 showed
+      the 11-06 notification sent and a new 2026-11-07T07:00:00+02:00 notification 'scheduled', which
+      breaks the "no notification in status 'scheduled'" part. The next sweep at 2026-11-20T06:45 then
+      reflected 'Нагадування: потрібно пройти сертифікацію\n7 листопада о 7:00'. The cause is the existing
+      catch-up rule, which this fix leaves alone and its scope does not cover: each tick delivers one
+      occurrence and arms the next one, counted from the occurrence that just fired (enqueueNextOccurrence,
+      spec 0003 accepts late catch-up). So one jump from 11-05 to 11-19 delivers the 6th, not the 19th, and
+      no code change within this fix's scope can meet the criterion as written. Diagnostic run (not a
+      criterion): 12 more sweeps at 2026-11-20T06:45 delivered 11-08 through 11-19, one per tick. The 13th
+      and 14th returned replies []. /export then listed 14 notifications (11-06 to 11-19), all 'sent', none
+      after 2026-11-19T07:00 and none 'scheduled'. So the end is respected. Owner decision needed: amend
+      stops-after-end, for example to repeat POST /sweep at 2026-11-20T06:45 until it reflects no
+      certification reminder and then assert the export, or decide on a catch-up policy in a spec. Sending
+      it back to the implementer unchanged will not help. Side note: the first poll, the same repro message
+      on 900000005 with now 2026-11-25T11:48, came back as a clarify reply (0.49) and stored nothing; the
+      same request repeated later stored until 2026-12-09 correctly. Security pass PASS.
 ---
 
 # BUG-0008 - A repeat's end ("протягом 14 днів", "до 1 грудня") is dropped; it fires forever

@@ -1,6 +1,6 @@
 ---
 id: 0008-recurrence-end-ignored
-state: VERIFIED
+state: DONE
 severity: high
 attempt: 1
 max_attempts: 3

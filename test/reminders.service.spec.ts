@@ -552,6 +552,93 @@ describe('RemindersService.releaseAfterFailedSend', () => {
   });
 });
 
+/** "every day at 7 for the next 14 days", asked on 2026-11-05 (BUG-0008). */
+const CERT: Recurrence = {
+  freq: 'daily',
+  atLocal: '07:00',
+  timezone: 'Europe/Kyiv',
+  until: '2026-11-19',
+};
+
+describe('RemindersService recurrence end (BUG-0008)', () => {
+  function certNotification(store: ReturnType<typeof fakeTransaction>, atLocal: string): DueNotification {
+    return { ...store.notification, title: 'certification', eventAt: atLocal, atLocal, recurrence: CERT };
+  }
+
+  // acceptance: unit-stops-at-until - the occurrence before the end still arms the last one
+  it('arms the last occurrence on the until date, keeping until on the rule', async () => {
+    const store = fakeTransaction(false);
+
+    const next = await store.service.enqueueNextOccurrence(
+      certNotification(store, '2026-11-18T07:00:00+02:00'),
+      new Date('2026-11-18T06:45:00+02:00'),
+    );
+
+    expect(next).toBe('2026-11-19T07:00:00+02:00');
+    expect(store.sets).toHaveLength(1);
+    expect(store.sets[0].data.recurrence).toEqual(CERT);
+  });
+
+  // acceptance: unit-stops-at-until / stops-after-end - nothing is armed after the last occurrence
+  it('writes nothing after the last occurrence', async () => {
+    const store = fakeTransaction(false);
+
+    const next = await store.service.enqueueNextOccurrence(
+      certNotification(store, '2026-11-19T07:00:00+02:00'),
+      new Date('2026-11-19T06:45:00+02:00'),
+    );
+
+    expect(next).toBeUndefined();
+    expect(store.sets).toHaveLength(0);
+    expect(store.updates).toHaveLength(0);
+  });
+
+  it('stores until on the reminder and its one notification', async () => {
+    const store = fakeFirestore();
+
+    const id = await store.service.create(
+      USER,
+      CHAT,
+      { title: 'certification', recurrence: CERT },
+      'every day at 7 for 14 days',
+      new Date('2026-11-05T11:48:00+02:00'),
+    );
+
+    expect(id).toBeTruthy();
+    expect(reminder(store.writes).recurrence).toEqual(CERT);
+    const nudges = notifications(store.writes);
+    expect(nudges).toHaveLength(1);
+    expect(nudges[0].atLocal).toBe('2026-11-06T07:00:00+02:00');
+    expect(nudges[0].recurrence).toEqual(CERT);
+  });
+
+  it('stores nothing when until is before the first occurrence', async () => {
+    const store = fakeFirestore();
+
+    const id = await store.service.create(
+      USER,
+      CHAT,
+      { title: 'certification', recurrence: CERT },
+      'every day at 7 until November 19',
+      new Date('2026-11-20T06:00:00+02:00'),
+    );
+
+    expect(id).toBeUndefined();
+    expect(store.writes).toHaveLength(0);
+  });
+
+  it('keeps until when a stored rule is re-validated for /export', async () => {
+    const service = fakeStore(
+      [{ id: 'notification-1', data: { atLocal: '2026-11-06T07:00:00+02:00', status: 'scheduled' } }],
+      { recurrence: CERT, eventAt: '2026-11-06T07:00:00+02:00' },
+    );
+
+    const [exported] = await service.list(USER);
+
+    expect(exported.recurrence).toEqual(CERT);
+  });
+});
+
 describe('RemindersService.enqueueNextOccurrence', () => {
   // acceptance: recurrence-rolls-forward - the fired occurrence is 2027, so the one armed is 2028.
   // The tick's own "now" is 10 minutes BEFORE the fired occurrence, which is exactly the case that

@@ -4,7 +4,13 @@ import { DateTime } from 'luxon';
 import { FirestoreService } from '../firestore/firestore.service';
 import { computeExpireAt, EXPIRE_HOURS, normalizeEventAt } from './event-at';
 import { resolveNotifyTimes } from './notify-times';
-import { Recurrence, nextOccurrence, nextOccurrenceAfter, normalizeRecurrence } from './recurrence';
+import {
+  Recurrence,
+  hasEndedAfter,
+  nextOccurrence,
+  nextOccurrenceAfter,
+  normalizeRecurrence,
+} from './recurrence';
 
 /** The subcollection holding one document per nudge. Also the collection group the sweep queries. */
 export const NOTIFICATIONS = 'notifications';
@@ -165,7 +171,8 @@ export class RemindersService {
    * A draft carrying a `recurrence` takes the recurring path instead: its occurrence comes from the
    * rule (so no `eventAt` is required, and a supplied one is ignored), it is written with **no**
    * `expireAt` so the TTL policy can never reap it, and it gets exactly **one** scheduled
-   * notification - the next occurrence. The sweeper arms the one after it on delivery.
+   * notification - the next occurrence. The sweeper arms the one after it on delivery. A rule whose
+   * `until` falls before its first occurrence has none, so it is not stored (`undefined`).
    *
    * An all-day one-off (`allDay` without a recurrence, BUG-0007) gets exactly the requested
    * notifications: its `eventAt` is the 23:59 sentinel, so when none of them resolves there is no
@@ -385,6 +392,8 @@ export class RemindersService {
    * The next occurrence is measured from the **fired occurrence**, not from `now`: a tick runs up to
    * one look-ahead interval early, so measuring from now would re-arm the occurrence that just
    * fired and the reminder would never advance.
+   *
+   * A rule whose `until` has passed writes nothing: the occurrence that just fired was its last.
    */
   async enqueueNextOccurrence(
     notification: DueNotification,
@@ -398,7 +407,14 @@ export class RemindersService {
     }
 
     const firedAt = DateTime.fromISO(notification.atLocal, { setZone: true });
-    const atLocal = nextOccurrenceAfter(recurrence, firedAt.isValid ? firedAt.toJSDate() : now);
+    const from = firedAt.isValid ? firedAt.toJSDate() : now;
+    const atLocal = nextOccurrenceAfter(recurrence, from);
+    // Past its `until` the repeat is over (BUG-0008): nothing is armed, and the reminder closes the
+    // normal way once its last delivered notification is acked. Ids only in the log.
+    if (!atLocal && hasEndedAfter(recurrence, from)) {
+      this.logger.log(`Reminder ${notification.reminderId} recurrence ended`);
+      return undefined;
+    }
     if (!atLocal) {
       this.logger.warn(`Could not resolve the next occurrence after notification ${notification.id}`);
       return undefined;

@@ -1,8 +1,8 @@
 ---
 id: 0008-recurrence-end-ignored
-state: READY
+state: VERIFIED
 severity: high
-attempt: 0
+attempt: 1
 max_attempts: 3
 branch: fix/0008-recurrence-end-ignored
 acceptance:
@@ -13,17 +13,65 @@ acceptance:
   - id: repro-fixed
     assert: "With X-Test-Now=2026-11-05T11:48:00+02:00, from user 900000001 POST 'На протязі наступних 14 днів кожного дня з ранку о 7:00 ранку нагадуй мені, що мені потрібно пройти сертифікацію.'; '/export' from 900000001 shows exactly one reminder whose recurrence has freq == 'daily', atLocal == '07:00' and until == '2026-11-19', with exactly one scheduled notification at 2026-11-06T07:00:00+02:00; the reply starts with 'Нагадування збережено:' and contains 'до 19 листопада'"
   - id: stops-after-end
-    assert: "Continuing repro-fixed for user 900000001: POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-11-19T06:45:00+02:00; '/export' from 900000001 shows no notification whose at is later than 2026-11-19T07:00:00+02:00 and no notification in status 'scheduled'; a further POST /sweep with X-Test-Now=2026-11-20T06:45:00+02:00 reflects no string starting with 'Нагадування:' that contains 'сертифікац' (case-insensitive)"
+    assert: "Continuing repro-fixed for user 900000001 (catch-up delivers one occurrence per sweep, by design): repeat POST /sweep (valid X-Sweep-Secret) with X-Test-Now=2026-11-20T06:45:00+02:00 until a sweep reflects no string starting with 'Нагадування:' that contains 'сертифікац' (case-insensitive), at most 20 sweeps; exactly 14 such strings were reflected in total; '/export' from 900000001 then shows exactly 14 notifications, at 2026-11-06T07:00:00+02:00 through 2026-11-19T07:00:00+02:00, none later than 2026-11-19T07:00:00+02:00 and none in status 'scheduled'"
   - id: until-date
     assert: "With X-Test-Now=2026-11-25T10:00:00+02:00, from user 900000002 POST 'Щодня о 9 вечора до 1 грудня нагадуй мені пити вітаміни'; '/export' from 900000002 shows exactly one reminder whose recurrence has freq == 'daily', atLocal == '21:00' and until == '2026-12-01'"
   - id: no-end-unchanged
     assert: "With X-Test-Now=2026-11-25T10:00:00+02:00, from user 900000003 POST 'Нагадуй мені щодня о 8 ранку робити зарядку'; '/export' from 900000003 shows exactly one reminder whose recurrence has freq == 'daily', atLocal == '08:00' and no until field"
   - id: birthday-unchanged
     assert: "With X-Test-Now=2026-11-25T10:00:00+02:00, from user 900000004 POST 'У Олени день народження 12 червня'; '/export' from 900000004 shows exactly one reminder whose recurrence has freq == 'yearly', month == 6, day == 12 and no until field"
-failures: []
+failures:
+  - attempt: 0
+    stage: verification
+    detail: >-
+      One criterion fails as written: stops-after-end. The fix itself works, but the criterion's single-sweep
+      setup cannot pass, so the owner needs to amend it. testing = 46066b0 (fix + lane commit) was proven
+      live at 15:00:43 UTC: 'Щодня о 9 вечора до 1 грудня ...' on spare user 900000006 stored recurrence
+      until '2026-12-01' and replied '... до 1 грудня', which only the fix can produce. PASS: health (GET /
+      200 {"status":"ok"}); unit-stops-at-until (npm test 411/411; on the tests-only commit e922261 the 16
+      new BUG-0008 tests fail, among them 'stops a daily rule after its inclusive until date' and 'writes
+      nothing after the last occurrence'); repro-fixed (900000001, now 2026-11-05T11:48+02:00: reply
+      'Нагадування збережено: потрібно пройти сертифікацію\nЗавтра о 7:00\nПовторюється: щодня о 7:00 до 19
+      листопада', one reminder {daily, 07:00, Europe/Kyiv, until 2026-11-19}, one scheduled notification at
+      2026-11-06T07:00:00+02:00); until-date (900000002: {daily, 21:00, until 2026-12-01});
+      no-end-unchanged (900000003: {daily, 08:00}, no until); birthday-unchanged (900000004: {yearly,
+      month 6, day 12}, no until). FAIL: stops-after-end. POST /sweep at 2026-11-19T06:45+02:00 reflected
+      'Нагадування: потрібно пройти сертифікацію\n6 листопада о 7:00'. After it, /export for 900000001 showed
+      the 11-06 notification sent and a new 2026-11-07T07:00:00+02:00 notification 'scheduled', which
+      breaks the "no notification in status 'scheduled'" part. The next sweep at 2026-11-20T06:45 then
+      reflected 'Нагадування: потрібно пройти сертифікацію\n7 листопада о 7:00'. The cause is the existing
+      catch-up rule, which this fix leaves alone and its scope does not cover: each tick delivers one
+      occurrence and arms the next one, counted from the occurrence that just fired (enqueueNextOccurrence,
+      spec 0003 accepts late catch-up). So one jump from 11-05 to 11-19 delivers the 6th, not the 19th, and
+      no code change within this fix's scope can meet the criterion as written. Diagnostic run (not a
+      criterion): 12 more sweeps at 2026-11-20T06:45 delivered 11-08 through 11-19, one per tick. The 13th
+      and 14th returned replies []. /export then listed 14 notifications (11-06 to 11-19), all 'sent', none
+      after 2026-11-19T07:00 and none 'scheduled'. So the end is respected. Owner decision needed: amend
+      stops-after-end, for example to repeat POST /sweep at 2026-11-20T06:45 until it reflects no
+      certification reminder and then assert the export, or decide on a catch-up policy in a spec. Sending
+      it back to the implementer unchanged will not help. Side note: the first poll, the same repro message
+      on 900000005 with now 2026-11-25T11:48, came back as a clarify reply (0.49) and stored nothing; the
+      same request repeated later stored until 2026-12-09 correctly. Security pass PASS.
 ---
 
 # BUG-0008 - A repeat's end ("протягом 14 днів", "до 1 грудня") is dropped; it fires forever
+
+> **VERIFIED 2026-11-25, attempt 2** (spec-verifier) on telegram-echo-bot-test, testing = 13124eb
+> (fix/0008 + lane commit; its src/test are byte-identical to attempt 1's 46066b0). Proven live at
+> 15:17:07 UTC by the repro on spare user 900000005 (now 2026-11-25T10:00+02:00, 'Щодня о 9 вечора до
+> 1 грудня ...'): stored recurrence `until: '2026-12-01'`, reply `... щодня о 21:00 до 1 грудня`,
+> which pre-fix code cannot produce. All 7 criteria pass: health 200 {"status":"ok"};
+> unit-stops-at-until (npm test 411/411; the 3 regression files at the tests-only commit e922261
+> fail 16 tests on the pre-fix source, among them 'stops a daily rule after its inclusive until
+> date' and 'writes nothing after the last occurrence'); repro-fixed (900000001, reply
+> `Нагадування збережено: потрібно пройти сертифікацію` / `Завтра о 7:00` / `Повторюється: щодня о
+> 7:00 до 19 листопада`, one reminder {daily, 07:00, Europe/Kyiv, until 2026-11-19}, one scheduled
+> notification 2026-11-06T07:00:00+02:00); stops-after-end (amended: sweeps 1-14 at
+> 2026-11-20T06:45+02:00 each reflected one `Нагадування: потрібно пройти сертифікацію`, 6 through 19
+> листопада, sweep 15 reflected `[]`, total 14; /export then 14 notifications 2026-11-06 to
+> 2026-11-19 07:00+02:00, all `sent`, none later, none `scheduled`); until-date (900000002: {daily,
+> 21:00, until 2026-12-01}); no-end-unchanged (900000003: {daily, 08:00}, no until);
+> birthday-unchanged (900000004: {yearly, month 6, day 12}, no until). Security pass PASS (A-G).
 
 ## Symptom
 
@@ -39,7 +87,7 @@ reminder (`users/281473866/reminders/fHfJKsYN3VVluVxwn9w4`) was closed by hand o
 
 On the test function, with `X-Test-Now=2026-11-05T11:48:00+02:00`, send the message above from
 `900000001`. `/export` shows `recurrence: {freq: daily, atLocal: "07:00", timezone: Europe/Kyiv}` -
-no end. A `/sweep` at `2026-11-19T06:45+02:00` delivers the 19th and arms 2026-11-20, and so on.
+no end. Sweeping past the end keeps delivering one occurrence per sweep (catch-up) and arms 2026-11-20, 2026-11-21, and so on, forever.
 
 ## Root cause
 
@@ -107,3 +155,10 @@ no-regression `no-end-unchanged` and `birthday-unchanged`.
   "for 3 weeks" term is `forDays: 21`).
 - Editing the end of an already stored reminder.
 - Back-filling `until` onto existing prod reminders.
+
+## Criterion amendment (2026-11-25, after attempt 1)
+
+`stops-after-end` originally assumed one sweep at 2026-11-19 lands on the 19th occurrence. The
+existing catch-up rule delivers one occurrence per sweep, counted from the one that just fired, so
+the criterion now sweeps repeatedly and checks the total (14) and that nothing is armed after the
+end. The code was not changed; attempt 1 already showed this behaviour (14 deliveries, then none).

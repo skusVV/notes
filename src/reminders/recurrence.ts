@@ -32,6 +32,9 @@ const DEFAULT_AT_LOCAL = `${String(DEFAULT_RECURRENCE_HOUR).padStart(2, '0')}:00
 // the whole point - see the Recurrence doc comment.
 const AT_LOCAL = /^(\d{1,2}):(\d{2})$/;
 
+// 'YYYY-MM-DD', a bare local calendar date - the only shape `until` is stored in.
+const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
  * A repeat rule, stored as **local wall-clock plus timezone - never a UTC instant** (the DST rule
  * in docs/architecture.md section 8). "09:00 on June 12" is 06:00 UTC in summer and 07:00 UTC in
@@ -53,6 +56,12 @@ export interface Recurrence {
   atLocal: string;
   /** IANA name the wall-clock time is read in. */
   timezone: string;
+  /**
+   * The last local calendar date (`YYYY-MM-DD`, in `timezone`) an occurrence may fall on,
+   * **inclusive**. Absent means the rule never ends; it is never filled with a placeholder.
+   * A stated term ("for 14 days") arrives as this date already - the term itself is never stored.
+   */
+  until?: string;
 }
 
 function isFreq(value: string): value is RecurrenceFreq {
@@ -104,7 +113,10 @@ export function normalizeRecurrence(
 
   const atLocal = normalizeAtLocal(raw.atLocal) ?? DEFAULT_AT_LOCAL;
   const zone = typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'UTC';
-  const base = { freq, atLocal, timezone: zone };
+  // A bad `until` is dropped like any other bad field; the caller that knows an end was stated
+  // (the classifier) is the one that refuses to let that become "forever".
+  const until = normalizeUntil(raw.until);
+  const base = { freq, atLocal, timezone: zone, ...(until ? { until } : {}) };
 
   if (freq === 'daily') {
     return base;
@@ -152,6 +164,42 @@ export function normalizeAtLocal(value: unknown): string | undefined {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+/** A real calendar date as 'YYYY-MM-DD', or `undefined`. Nothing is coerced: "1 грудня", a
+ * timestamp, or 30 February are not dates this field can hold. */
+export function normalizeUntil(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!LOCAL_DATE.test(trimmed)) {
+    return undefined;
+  }
+  return DateTime.fromISO(trimmed, { zone: 'UTC' }).isValid ? trimmed : undefined;
+}
+
+/**
+ * The inclusive `until` a stated term ("протягом 14 днів", `forDays: 14`) means: the local date of
+ * the rule's **first occurrence** at or after `now`, plus `forDays - 1` calendar days - so "for N
+ * days, every day" is exactly N occurrences. Calendar days via luxon, never 24-hour blocks, because
+ * a DST day is 23 or 25 hours. `undefined` when `forDays` is not a positive integer or the rule has
+ * no first occurrence; the model never does this arithmetic.
+ */
+export function untilFromForDays(
+  recurrence: Recurrence,
+  forDays: unknown,
+  now: Date,
+): string | undefined {
+  if (typeof forDays !== 'number' || !Number.isInteger(forDays) || forDays < 1) {
+    return undefined;
+  }
+  const first = nextOccurrence({ ...recurrence, until: undefined }, now);
+  if (!first) {
+    return undefined;
+  }
+  const day = DateTime.fromISO(first, { setZone: true });
+  return day.isValid ? (day.plus({ days: forDays - 1 }).toISODate() ?? undefined) : undefined;
+}
+
 /** A verbatim substring check, not a semantic one: it can't tell a real quote from a coincidental
  * one, but it does make bare invention impossible - the model must ground its claim in text that
  * is actually there. */
@@ -180,6 +228,20 @@ function wholeNumber(value: unknown): number | undefined {
  */
 export function nextOccurrence(recurrence: Recurrence, from: Date): string | undefined {
   return resolve(recurrence, from, false);
+}
+
+/**
+ * True when `recurrence` would still have an occurrence after `instant` but for its `until` - the
+ * "this repeat is over" case, as opposed to a rule that cannot be resolved at all.
+ */
+export function hasEndedAfter(recurrence: Recurrence, instant: Date): boolean {
+  if (!recurrence.until) {
+    return false;
+  }
+  return (
+    nextOccurrenceAfter(recurrence, instant) === undefined &&
+    nextOccurrenceAfter({ ...recurrence, until: undefined }, instant) !== undefined
+  );
 }
 
 /**
@@ -235,6 +297,11 @@ function resolve(recurrence: Recurrence, from: Date, strict: boolean): string | 
       return undefined;
     }
     if (isAtOrAfter(candidate, from, strict)) {
+      // `until` is a local date in the rule's zone, so the occurrence's own local date is compared
+      // (both 'YYYY-MM-DD', so string order is date order). Past it, the rule has ended.
+      if (recurrence.until && (candidate.toISODate() ?? '') > recurrence.until) {
+        return undefined;
+      }
       return candidate.toISO({ suppressMilliseconds: true, includeOffset: true }) ?? undefined;
     }
     candidate = step(candidate);
@@ -268,6 +335,10 @@ function isAtOrAfter(candidate: DateTime, from: Date, strict: boolean): boolean 
  * the same 'о'/'об' rule as every other reply applies.
  */
 export function describeRecurrence(recurrence: Recurrence): string {
+  return `${describeRule(recurrence)}${describeUntil(recurrence.until)}`;
+}
+
+function describeRule(recurrence: Recurrence): string {
   const at = ` ${humanizeTimeOfDay(recurrence.atLocal)}`;
   switch (recurrence.freq) {
     case 'daily':
@@ -279,6 +350,16 @@ export function describeRecurrence(recurrence: Recurrence): string {
     case 'yearly':
       return `щороку ${recurrence.day} ${MONTHS_GENITIVE[(recurrence.month ?? 1) - 1]}${at}`;
   }
+}
+
+/** ' до 19 листопада' for a rule that ends, '' otherwise - the same month-genitive form as every
+ * other date in a reply, never the raw 'YYYY-MM-DD'. */
+function describeUntil(until: string | undefined): string {
+  const day = until ? DateTime.fromISO(until, { zone: 'UTC' }) : undefined;
+  if (!day?.isValid) {
+    return '';
+  }
+  return ` до ${day.day} ${MONTHS_GENITIVE[day.month - 1]}`;
 }
 
 /** How each weekday reads in "every <weekday>": genitive/adverbial forms after "що". */

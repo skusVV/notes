@@ -1,17 +1,25 @@
 ---
 id: 0009-remind-me-filed-as-note
-state: OPEN
+state: READY
 severity: high
 attempt: 0
 max_attempts: 3
 branch: fix/0009-remind-me-filed-as-note
-acceptance: []
+acceptance:
+  - id: health
+    assert: "GET / returns HTTP 200 with body {\"status\":\"ok\"}"
+  - id: repro-fixed
+    assert: "Three times, each from a fresh state: POST a webhook text update from user 900000004 with X-Test-Now=2026-10-25T20:27:00+02:00 and text 'Нагадай мені завтра десь о 1:00 годині дня, що я працював над додатком е-е для годиннику і сьогодні ввечері о 20:23 він мені дав якесь дивне сповіщення без тексту.'. After each, /export from 900000004 contains a reminder whose originalText equals that text and whose eventAt is 2026-10-26T13:00:00+02:00, and notes[] contains no entry whose originalText equals that text. 3 of 3 runs pass. (Delete the stored reminder between runs, or use the reminder count: exactly one new reminder per run.)"
+  - id: note-unchanged
+    assert: "POST a webhook text update from user 900000004 with text 'Цікава думка: годинник краще заряджати вночі.'; /export from 900000004 then contains a note whose originalText equals that text, and no reminder whose originalText equals it"
+  - id: regression-test
+    assert: "npm test passes and includes a regression test that fails on the pre-fix code, asserting the classifier prompt states that an explicit request to be reminded (нагадай / нагадуй / remind me / напомни) is always a reminder item, with the content after що/about/to as its title even when it describes the past"
 failures: []
 ---
 
 # BUG-0009 - Явне "Нагадай мені..." збережено як нотатку
 
-> **OPEN** (2026-11-25). Знайдено в прод-даних власника. Перед `READY` треба відтворити на тестовій
+> **READY 2026-11-26** (owner: "fix bug 0009"). **OPEN** (2026-11-25). Знайдено в прод-даних власника. Перед `READY` треба відтворити на тестовій
 > функції (крок Reproduction), бо прод-логи за 2026-10-25 вже видалено (зберігання 30 днів).
 
 ## Symptom

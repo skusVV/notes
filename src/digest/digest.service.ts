@@ -4,6 +4,7 @@ import { MONTHS_GENITIVE } from '../reminders/humanize-time';
 import {
   DIGEST_SECTIONS,
   DigestContext,
+  DigestMessage,
   DigestSection,
   DigestSectionResult,
 } from './digest.types';
@@ -36,14 +37,15 @@ export class DigestService {
   constructor(@Inject(DIGEST_SECTIONS) private readonly sections: DigestSection[]) {}
 
   /**
-   * The digest text for `ctx`. When every section is empty (or failed) it is the greeting plus
-   * {@link DIGEST_EMPTY_DAY_LINE} - an empty day still gets a message.
+   * The digest for `ctx`: its text, and the buttons of the shown sections (if any). When every
+   * section is empty (or failed) it is the greeting plus {@link DIGEST_EMPTY_DAY_LINE} - an empty
+   * day still gets a message, with no buttons.
    *
    * Sections are asked in parallel, each in its own try/catch: one that throws is logged by id and
    * skipped, and the rest still make the message. Plain text - the caller sends it with no
    * `parse_mode`, because section lines carry the user's own words.
    */
-  async build(ctx: DigestContext): Promise<string> {
+  async build(ctx: DigestContext): Promise<DigestMessage> {
     const results = await Promise.all(
       this.sections.map(async (section) => {
         try {
@@ -69,7 +71,7 @@ export class DigestService {
 
     if (shown.length === 0) {
       this.logger.log(`Digest for user ${ctx.userId}: empty day`);
-      return [greeting(ctx), DIGEST_EMPTY_DAY_LINE].join('\n\n');
+      return { text: [greeting(ctx), DIGEST_EMPTY_DAY_LINE].join('\n\n') };
     }
 
     // Counts only: the lines themselves are the user's private notes.
@@ -80,7 +82,9 @@ export class DigestService {
     );
 
     const blocks = shown.map(({ result }) => renderSection(result));
-    return [greeting(ctx), ...blocks].join('\n\n');
+    const rows = shown.flatMap(({ result }) => result.keyboard?.inline_keyboard ?? []);
+    const text = [greeting(ctx), ...blocks].join('\n\n');
+    return rows.length > 0 ? { text, keyboard: { inline_keyboard: rows } } : { text };
   }
 }
 

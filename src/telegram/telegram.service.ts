@@ -14,6 +14,7 @@ import {
 } from '../classifier/classifier.types';
 import { ClockService } from '../clock/clock.service';
 import { DigestExport, DigestSettingsService } from '../digest/digest-settings.service';
+import { GARMIN_RAW_CALLBACK, GARMIN_RAW_NONE, GarminRawService } from '../garmin/garmin-raw';
 import { NotesService } from '../notes/notes.service';
 import { normalizeEventAt } from '../reminders/event-at';
 import { humanizeDay, humanizeInstant } from '../reminders/humanize-time';
@@ -317,6 +318,8 @@ export class TelegramService {
     private readonly symptoms: SymptomsService,
     private readonly clock: ClockService,
     private readonly digestSettings: DigestSettingsService,
+    // The `📊 Дані Garmin` button (spec 0026). Absent only in unit tests that never tap it.
+    private readonly garminRaw?: GarminRawService,
   ) {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token) {
@@ -642,17 +645,26 @@ export class TelegramService {
     sink?: string[],
   ): Promise<void> {
     const sender = describeSender(query.from);
-    const tap = parseCallbackData(query.data);
+    const garminRaw = query.data?.trim() === GARMIN_RAW_CALLBACK;
+    const tap = garminRaw ? undefined : parseCallbackData(query.data);
 
     // The notification id, the action, and the sender - never the reminder's contents.
     this.logger.log(
-      `Received callback ${tap?.action ?? 'unparseable'} from ${sender} for notification ${tap?.id ?? 'none'}`,
+      garminRaw
+        ? `Received callback ${GARMIN_RAW_CALLBACK} from ${sender}`
+        : `Received callback ${tap?.action ?? 'unparseable'} from ${sender} for notification ${tap?.id ?? 'none'}`,
     );
 
     // The gate precedes every read and write, exactly as it does for messages.
     if (!this.isAllowed(query.from)) {
       this.logger.warn(`Denied ${sender}: not in ALLOWED_USERS`);
       await this.answerCallback(query.id, 'Sorry, you are not allowed to use this bot.', sink);
+      return;
+    }
+
+    // After the gate, before the reminder buttons: the digest's raw-data button (spec 0026).
+    if (garminRaw) {
+      await this.handleGarminRaw(query, now, sender, sink);
       return;
     }
 
@@ -720,14 +732,46 @@ export class TelegramService {
     );
   }
 
-  /** Stops Telegram's spinner on the tapped button. Reflected too, so a test can read the outcome. */
-  private async answerCallback(callbackId: string, text: string, sink?: string[]): Promise<void> {
-    if (sink) {
+  /**
+   * The `📊 Дані Garmin` tap: stop the spinner with no text, then send the raw numbers read from
+   * Firestore now - not the ones the digest saw. The button stays, so it can be tapped again. Only
+   * the user id is logged, never a value.
+   */
+  private async handleGarminRaw(
+    query: TelegramCallbackQuery,
+    now: Date,
+    sender: string,
+    sink?: string[],
+  ): Promise<void> {
+    await this.answerCallback(query.id, undefined, sink);
+    const chatId = query.message?.chat.id ?? query.from.id;
+    let text: string;
+    try {
+      text = this.garminRaw
+        ? await this.garminRaw.text(query.from.id, now, this.classifier.defaultTimezone)
+        : GARMIN_RAW_NONE;
+      this.logger.log(`Answering ${GARMIN_RAW_CALLBACK} for ${sender}`);
+    } catch (error) {
+      this.logger.error(`Failed to read Garmin data for ${sender}: ${(error as Error)?.name ?? 'error'}`);
+      text = 'Sorry, that did not go through.';
+    }
+    await this.sendMessage(chatId, text, sink);
+  }
+
+  /**
+   * Stops Telegram's spinner on the tapped button. Reflected too, so a test can read the outcome -
+   * except a text-less answer, which shows the user nothing and so reflects nothing.
+   */
+  private async answerCallback(callbackId: string, text: string | undefined, sink?: string[]): Promise<void> {
+    if (sink && text !== undefined) {
       sink.push(text);
     }
 
     try {
-      await this.api.post('/answerCallbackQuery', { callback_query_id: callbackId, text });
+      await this.api.post('/answerCallbackQuery', {
+        callback_query_id: callbackId,
+        ...(text !== undefined ? { text } : {}),
+      });
     } catch (error) {
       this.logger.warn(`answerCallbackQuery failed: ${(error as Error).message}`);
     }
@@ -899,10 +943,16 @@ export class TelegramService {
    * Sends one morning digest. Called by the digest runner only after it has claimed the day, so this
    * never decides whether to send. Plain text through the chunking `sendMessage` - no `parse_mode`,
    * because the digest lists reminder titles in the user's own words. Outside reflect mode a failed
-   * send throws, so the runner can report it.
+   * send throws, so the runner can report it. `keyboard` (the digest's buttons) goes on the last
+   * chunk.
    */
-  async sendDigest(chatId: number, text: string, sink?: string[]): Promise<void> {
-    await this.sendMessage(chatId, text, sink);
+  async sendDigest(
+    chatId: number,
+    text: string,
+    sink?: string[],
+    keyboard?: InlineKeyboardMarkup,
+  ): Promise<void> {
+    await this.sendMessage(chatId, text, sink, keyboard);
   }
 
   private async handleVoice(

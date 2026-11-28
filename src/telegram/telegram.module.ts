@@ -3,6 +3,7 @@ import { ActorsModule } from '../actors/actors.module';
 import { ClassifierModule } from '../classifier/classifier.module';
 import { ClockModule } from '../clock/clock.module';
 import { DigestModule } from '../digest/digest.module';
+import { GarminModule } from '../garmin/garmin.module';
 import { NotesModule } from '../notes/notes.module';
 import { RemindersModule } from '../reminders/reminders.module';
 import { SymptomsModule } from '../symptoms/symptoms.module';
@@ -22,6 +23,8 @@ import { TelegramService } from './telegram.service';
     ClockModule,
     // For the /digest command and the digest key in /export.
     DigestModule,
+    // For the digest's `📊 Дані Garmin` button (spec 0026).
+    GarminModule,
   ],
   controllers: [TelegramController],
   providers: [TelegramService, SweeperService],

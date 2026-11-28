@@ -52,7 +52,7 @@ export class DigestRunnerService {
       return this.skip(userId, 'already_sent');
     }
 
-    const text = await this.digest.build({
+    const { text, keyboard } = await this.digest.build({
       userId,
       now,
       timezone,
@@ -66,7 +66,7 @@ export class DigestRunnerService {
     }
 
     try {
-      await this.telegram.sendDigest(settings.chatId, text, sink);
+      await this.telegram.sendDigest(settings.chatId, text, sink, keyboard);
     } catch (error) {
       // The id and the error code only - never the digest text. Not retried: the day is already
       // claimed, so a repeat call the same day sends nothing either.

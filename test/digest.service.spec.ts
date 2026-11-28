@@ -35,7 +35,7 @@ describe('DigestService.build', () => {
       }),
     ]);
 
-    expect(await service.build(CTX)).toBe(
+    expect((await service.build(CTX)).text).toBe(
       [
         'Доброго ранку! Сьогодні 16 вересня.',
         '',
@@ -48,7 +48,7 @@ describe('DigestService.build', () => {
 
   it('never puts a raw ISO timestamp in the message', async () => {
     const service = new DigestService([section('a', 1, { title: 'A', lines: ['x'] })]);
-    const text = await service.build(CTX);
+    const text = (await service.build(CTX)).text;
     expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
@@ -59,7 +59,7 @@ describe('DigestService.build', () => {
       section('middle', 100, { title: 'Другий', lines: ['b'] }),
     ]);
 
-    const text = (await service.build(CTX)) ?? '';
+    const text = (await service.build(CTX)).text;
     const first = text.indexOf('Перший');
     const second = text.indexOf('Другий');
     const third = text.indexOf('Третій');
@@ -76,7 +76,7 @@ describe('DigestService.build', () => {
       section('reminders', 100, { title: 'Нагадування', lines: ['Лікар - о 17:30'] }),
     ]);
 
-    const text = await service.build(CTX);
+    const text = (await service.build(CTX)).text;
     expect(text).toContain('Нагадування');
     expect(text).toContain('• Лікар - о 17:30');
   });
@@ -100,7 +100,7 @@ describe('DigestService.build', () => {
       section('none', 10, null),
       section('empty', 20, { title: 'Порожньо', lines: [] }),
     ]);
-    const text = await service.build(CTX);
+    const text = (await service.build(CTX)).text;
     expect(text).toBe(EMPTY_DAY);
     expect(text).not.toContain('Порожньо');
     expect(text).not.toContain('• ');
@@ -112,7 +112,7 @@ describe('DigestService.build', () => {
         throw new Error('boom');
       }),
     ]);
-    expect(await service.build(CTX)).toBe(EMPTY_DAY);
+    expect((await service.build(CTX)).text).toBe(EMPTY_DAY);
   });
 
   it('every section throwing gives the empty-day line', async () => {
@@ -124,11 +124,11 @@ describe('DigestService.build', () => {
         throw new Error('bang');
       }),
     ]);
-    expect(await service.build(CTX)).toBe(EMPTY_DAY);
+    expect((await service.build(CTX)).text).toBe(EMPTY_DAY);
   });
 
   it('no section registered gives the empty-day line', async () => {
-    expect(await new DigestService([]).build(CTX)).toBe(EMPTY_DAY);
+    expect((await new DigestService([]).build(CTX)).text).toBe(EMPTY_DAY);
   });
 
   it('a non-empty digest never carries the empty-day line', async () => {
@@ -136,7 +136,7 @@ describe('DigestService.build', () => {
       section('empty', 10, { title: 'Порожньо', lines: [] }),
       section('reminders', 100, { title: 'Нагадування', lines: ['bread - о 12:00'] }),
     ]);
-    const text = await service.build(CTX);
+    const text = (await service.build(CTX)).text;
     expect(text).toContain('bread');
     expect(text).not.toContain('На сьогодні нічого немає');
   });
@@ -147,7 +147,7 @@ describe('DigestService.build', () => {
       section('reminders', 100, { title: 'Нагадування', lines: ['a'] }),
     ]);
 
-    const text = await service.build(CTX);
+    const text = (await service.build(CTX)).text;
     expect(text).not.toContain('Порожньо');
     expect(text).toContain('Нагадування');
   });
@@ -157,7 +157,7 @@ describe('DigestService.build', () => {
     const lines = Array.from({ length: 22 }, (_, i) => `item ${i + 1}`);
     const service = new DigestService([section('big', 1, { title: 'Багато', lines })]);
 
-    const text = (await service.build(CTX)) ?? '';
+    const text = (await service.build(CTX)).text;
     const bullets = text.split('\n').filter((line) => line.startsWith('• '));
 
     expect(bullets).toHaveLength(16);
@@ -170,7 +170,7 @@ describe('DigestService.build', () => {
     const lines = Array.from({ length: 15 }, (_, i) => `item ${i + 1}`);
     const service = new DigestService([section('full', 1, { title: 'Рівно', lines })]);
 
-    const text = (await service.build(CTX)) ?? '';
+    const text = (await service.build(CTX)).text;
     expect(text.split('\n').filter((line) => line.startsWith('• '))).toHaveLength(15);
     expect(text).not.toContain('і ще');
   });
@@ -178,11 +178,34 @@ describe('DigestService.build', () => {
   it('reads the date in the digest zone', async () => {
     // 2026-09-30 21:30 UTC is already 1 October in Kyiv.
     const service = new DigestService([section('a', 1, { title: 'A', lines: ['x'] })]);
-    const text = await service.build({
+    const { text } = await service.build({
       ...CTX,
       dayStart: new Date('2026-09-30T21:00:00Z'),
       dayEnd: new Date('2026-10-01T21:00:00Z'),
     });
     expect(text?.split('\n')[0]).toBe('Доброго ранку! Сьогодні 1 жовтня.');
+  });
+
+  it('passes the buttons of shown sections, joined in section order (spec 0026)', async () => {
+    const raw = { inline_keyboard: [[{ text: '📊 Дані Garmin', callback_data: 'gd:raw' }]] };
+    const other = { inline_keyboard: [[{ text: 'B', callback_data: 'b' }]] };
+    const service = new DigestService([
+      section('late', 100, { title: 'Нагадування', lines: ['x'], keyboard: other }),
+      section('garmin-insights', 10, { title: "⌚ Здоров'я", lines: ['y'], keyboard: raw }),
+    ]);
+
+    const { keyboard } = await service.build(CTX);
+    expect(keyboard).toEqual({ inline_keyboard: [...raw.inline_keyboard, ...other.inline_keyboard] });
+  });
+
+  it('no buttons without a shown section that has some; a hidden section adds none', async () => {
+    const raw = { inline_keyboard: [[{ text: '📊 Дані Garmin', callback_data: 'gd:raw' }]] };
+    const plain = new DigestService([section('a', 1, { title: 'A', lines: ['x'] })]);
+    expect((await plain.build(CTX)).keyboard).toBeUndefined();
+
+    const hidden = new DigestService([section('g', 10, { title: 'G', lines: [], keyboard: raw })]);
+    const built = await hidden.build(CTX);
+    expect(built.keyboard).toBeUndefined();
+    expect(built.text).toBe(EMPTY_DAY);
   });
 });

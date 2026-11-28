@@ -35,6 +35,9 @@ import {
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 const DEFAULT_LOCATION = 'global';
+/** The same defaults for the digest's insight phrasing (spec 0026), so the two never drift. */
+export const CLASSIFIER_DEFAULT_MODEL = DEFAULT_MODEL;
+export const CLASSIFIER_DEFAULT_LOCATION = DEFAULT_LOCATION;
 const DEFAULT_TIMEZONE = 'UTC';
 
 /** Thrown when `classify` is called with no project configured. */

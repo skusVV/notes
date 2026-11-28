@@ -9,7 +9,11 @@ vi.mock('axios', () => {
   return { default: { create: vi.fn(() => instance) }, create: vi.fn(() => instance) };
 });
 
+import axios from 'axios';
 import { ClockService } from '../src/clock/clock.service';
+import { GarminDigestReader } from '../src/garmin/garmin-digest.reader';
+import { GarminRawService } from '../src/garmin/garmin-raw';
+import { fakeGarminDb } from './fake-garmin-db';
 import { parseCallbackData, reminderKeyboard, TelegramService } from '../src/telegram/telegram.service';
 import { TelegramUpdate } from '../src/telegram/telegram.types';
 
@@ -37,7 +41,11 @@ function fakeReminders(recurring = false) {
   };
 }
 
-function makeService(reminders: ReturnType<typeof fakeReminders>, allowedUsers?: string) {
+function makeService(
+  reminders: ReturnType<typeof fakeReminders>,
+  allowedUsers?: string,
+  garminRaw?: unknown,
+) {
   const config = {
     get: (key: string): string | undefined => {
       if (key === 'TELEGRAM_BOT_TOKEN') return 'fake:token';
@@ -63,6 +71,7 @@ function makeService(reminders: ReturnType<typeof fakeReminders>, allowedUsers?:
     symptoms as never,
     new ClockService(),
     { available: false } as never,
+    garminRaw as never,
   );
 }
 
@@ -265,5 +274,94 @@ describe('TelegramService callback handling', () => {
       service.handleUpdate(tap('ok', OWNER), replies, '2026-09-16T10:05:00+03:00'),
     ).resolves.toBeUndefined();
     expect(replies).toHaveLength(1);
+  });
+});
+
+describe('the 📊 Дані Garmin button (gd:raw, spec 0026)', () => {
+  const api = (axios.create as unknown as () => { post: ReturnType<typeof vi.fn> })();
+  const rawTap = (from: number, data = 'gd:raw'): TelegramUpdate => ({
+    update_id: 9,
+    callback_query: {
+      id: 'cbq-raw',
+      from: { id: from, is_bot: false },
+      message: { message_id: 4, chat: { id: 4242 } },
+      data,
+    },
+  });
+  /** A real raw service over a fake Firestore. */
+  const realRaw = (seed: Record<string, Record<string, unknown>> = {}) =>
+    new GarminRawService(new GarminDigestReader({ db: fakeGarminDb(seed).db } as never));
+
+  beforeEach(() => {
+    api.post.mockClear();
+  });
+
+  it('a user outside ALLOWED_USERS gets the refusal and nothing is read', async () => {
+    const raw = { text: vi.fn() };
+    const reminders = fakeReminders();
+    const service = makeService(reminders, String(OWNER), raw);
+    const replies: string[] = [];
+
+    await service.handleUpdate(rawTap(STRANGER), replies, '2026-11-25T09:00:00+02:00');
+
+    expect(replies).toEqual(['Sorry, you are not allowed to use this bot.']);
+    expect(raw.text).not.toHaveBeenCalled();
+    expect(reminders.getOwnedNotification).not.toHaveBeenCalled();
+  });
+
+  it('no garminSync: exactly "Даних Garmin немає.", the spinner stopped with no text', async () => {
+    const reminders = fakeReminders();
+    const service = makeService(reminders, String(OWNER), realRaw());
+    const replies: string[] = [];
+
+    await service.handleUpdate(rawTap(OWNER), replies, '2026-11-25T09:00:00+02:00');
+
+    expect(replies).toEqual(['Даних Garmin немає.']);
+    const answer = api.post.mock.calls.find(([path]) => path === '/answerCallbackQuery');
+    expect(answer?.[1]).toEqual({ callback_query_id: 'cbq-raw' });
+    const sent = api.post.mock.calls.find(([path]) => path === '/sendMessage');
+    expect(sent?.[1]).toMatchObject({ chat_id: 4242, text: 'Даних Garmin немає.' });
+    expect((sent?.[1] as Record<string, unknown>).parse_mode).toBeUndefined();
+    // Not a reminder button: the reminders store is never asked, the keyboard is not removed.
+    expect(reminders.getOwnedNotification).not.toHaveBeenCalled();
+    expect(api.post.mock.calls.some(([path]) => path === '/editMessageReplyMarkup')).toBe(false);
+  });
+
+  it('stale and fresh syncs reply with what Firestore holds at the tap', async () => {
+    const base = `users/${OWNER}`;
+    const stale = makeService(fakeReminders(), String(OWNER), realRaw({
+      [`${base}/system/garminSync`]: { lastSuccessAt: '2026-11-24T05:00:00.000Z' },
+    }));
+    const staleReplies: string[] = [];
+    await stale.handleUpdate(rawTap(OWNER), staleReplies, '2026-11-25T09:00:00+02:00');
+    expect(staleReplies).toEqual(['Сьогодні даних Garmin ще немає.']);
+
+    const fresh = makeService(fakeReminders(), String(OWNER), realRaw({
+      [`${base}/system/garminSync`]: { lastSuccessAt: '2026-11-25T05:00:00.000Z' },
+      [`${base}/health_daily/2026-11-25`]: { heart: { resting: 52 } },
+    }));
+    const freshReplies: string[] = [];
+    await fresh.handleUpdate(rawTap(OWNER), freshReplies, '2026-11-25T09:00:00+02:00');
+    expect(freshReplies).toEqual(['📊 Дані Garmin, 25 листопада\nПульс спокою: 52']);
+  });
+
+  it('a failed read still answers, without a value', async () => {
+    const raw = { text: vi.fn().mockRejectedValue(new Error('firestore is down')) };
+    const service = makeService(fakeReminders(), String(OWNER), raw);
+    const replies: string[] = [];
+
+    await expect(service.handleUpdate(rawTap(OWNER), replies, '2026-11-25T09:00:00+02:00')).resolves.toBeUndefined();
+    expect(replies).toEqual(['Sorry, that did not go through.']);
+  });
+
+  it('an unknown button is unchanged: "I do not recognise that button."', async () => {
+    const raw = { text: vi.fn() };
+    const service = makeService(fakeReminders(), String(OWNER), raw);
+    const replies: string[] = [];
+
+    await service.handleUpdate(rawTap(OWNER, 'xx:1'), replies, '2026-11-25T09:00:00+02:00');
+
+    expect(replies).toEqual(['I do not recognise that button.']);
+    expect(raw.text).not.toHaveBeenCalled();
   });
 });

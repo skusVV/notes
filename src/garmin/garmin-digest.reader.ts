@@ -4,13 +4,16 @@ import { DigestContext } from '../digest/digest.types';
 import { FirestoreService } from '../firestore/firestore.service';
 
 /**
- * What the "Вчора" section needs from `health_daily/{yesterday}`. Only the fields it shows; every
- * one is null when Garmin had no value, never 0.
+ * What the raw-data message (spec 0026) shows for yesterday, from `health_daily/{yesterday}`. Only
+ * the fields it shows; every one is null when Garmin had no value, never 0.
  */
 export interface GarminYesterdayDay {
   steps: number | null;
   stepsGoal: number | null;
   floorsUp: number | null;
+  /** `calories.total` / `calories.active` - for the raw-data message (spec 0026). */
+  caloriesTotal: number | null;
+  caloriesActive: number | null;
 }
 
 /** One activity of yesterday, as stored by the morning job in `activities/{activityId}`. */
@@ -31,18 +34,20 @@ export interface GarminYesterday {
   activities: GarminActivity[];
 }
 
-/** What the "Сон і відновлення" section needs from `health_daily/{today}`. */
+/** What the raw-data message shows for last night, from `health_daily/{today}`. */
 export interface GarminMorning {
   sleepSeconds: number | null;
   sleepScore: number | null;
   sleepScoreQualifier: string | null;
+  /** Garmin's sleep need for the night, in minutes (`sleep.needMinutes`). */
+  sleepNeedMinutes: number | null;
   hrvLastNightAvg: number | null;
   hrvBaselineBalancedLow: number | null;
   hrvBaselineBalancedUpper: number | null;
   restingHr: number | null;
 }
 
-/** The two dates the Garmin sections read, both local to the digest's zone. */
+/** The two dates the Garmin reads use, both local to the digest's zone. */
 export interface GarminDates {
   today: string;
   yesterday: string;
@@ -123,11 +128,14 @@ export class GarminDigestReader {
 
     const data = daySnapshot.exists ? daySnapshot.data() : undefined;
     const movement = record(data?.movement);
+    const calories = record(data?.calories);
     const day: GarminYesterdayDay | null = data
       ? {
           steps: num(movement.steps),
           stepsGoal: num(movement.stepsGoal),
           floorsUp: num(movement.floorsUp),
+          caloriesTotal: num(calories.total),
+          caloriesActive: num(calories.active),
         }
       : null;
 
@@ -165,6 +173,7 @@ export class GarminDigestReader {
       sleepSeconds: num(sleep.seconds),
       sleepScore: num(sleep.score),
       sleepScoreQualifier: typeof sleep.scoreQualifier === 'string' ? sleep.scoreQualifier : null,
+      sleepNeedMinutes: num(sleep.needMinutes),
       hrvLastNightAvg: num(hrv.lastNightAvg),
       hrvBaselineBalancedLow: num(hrv.baselineBalancedLow),
       hrvBaselineBalancedUpper: num(hrv.baselineBalancedUpper),

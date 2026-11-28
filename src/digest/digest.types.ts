@@ -1,3 +1,5 @@
+import { InlineKeyboardMarkup } from '../telegram/telegram.types';
+
 /**
  * What every digest section is handed. Computed once per digest and identical for all sections, so
  * two sections can never disagree about which day "today" is.
@@ -17,6 +19,17 @@ export interface DigestSectionResult {
   title: string;
   /** One entry per line, each without a bullet: the digest adds '• ' itself. */
   lines: string[];
+  /**
+   * Buttons this section puts under the digest (spec 0026: `📊 Дані Garmin`). Used only when the
+   * section is shown; the rows of every shown section are joined in section order.
+   */
+  keyboard?: InlineKeyboardMarkup;
+}
+
+/** The assembled digest: the text, and the buttons under its last chunk when any section had some. */
+export interface DigestMessage {
+  text: string;
+  keyboard?: InlineKeyboardMarkup;
 }
 
 /**

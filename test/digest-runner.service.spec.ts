@@ -213,6 +213,33 @@ describe('DigestRunnerService.run', () => {
     expect(http.post).toHaveBeenCalledTimes(1);
   });
 
+  it('the digest buttons ride on the sent message (spec 0026)', async () => {
+    const store = fakeDigestStore(enabled());
+    const telegram = makeTelegram();
+    const send = vi.spyOn(telegram, 'sendDigest');
+    const keyboard = { inline_keyboard: [[{ text: '📊 Дані Garmin', callback_data: 'gd:raw' }]] };
+    const section: DigestSection = {
+      id: 'garmin-insights',
+      order: 10,
+      build: async () => ({ title: "⌚ Здоров'я", lines: ['Усе в межах твоєї норми.'], keyboard }),
+    };
+    const runner = new DigestRunnerService(
+      store.settings,
+      new DigestService([section]),
+      telegram,
+      { defaultTimezone: 'Europe/Kyiv' } as never,
+    );
+
+    expect(await runner.run(U3, MORNING)).toEqual({ sent: true });
+    expect(send.mock.calls[0][3]).toEqual(keyboard);
+    const payload = http.post.mock.calls.find(([path]) => path === '/sendMessage')?.[1] as {
+      reply_markup?: unknown;
+      parse_mode?: unknown;
+    };
+    expect(payload.reply_markup).toEqual(keyboard);
+    expect(payload.parse_mode).toBeUndefined();
+  });
+
   it('sends to the chat stored by /digest on', async () => {
     const { runner, send } = makeRunner({
       seed: { [`users/${U3}`]: { digest: { enabled: true, chatId: 4242 } } },

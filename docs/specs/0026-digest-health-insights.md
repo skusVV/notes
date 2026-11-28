@@ -1,6 +1,6 @@
 ---
 id: 0026-digest-health-insights
-state: VERIFIED
+state: DONE
 attempt: 0
 max_attempts: 3
 branch: feat/0026-digest-health-insights

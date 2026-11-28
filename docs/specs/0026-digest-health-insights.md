@@ -1,6 +1,6 @@
 ---
 id: 0026-digest-health-insights
-state: IN-TESTING
+state: VERIFIED
 attempt: 0
 max_attempts: 3
 branch: feat/0026-digest-health-insights
@@ -27,6 +27,19 @@ failures: []
 > закономірності, тижневий підсумок у понеділок) лежить у [0027](0027-digest-insights-weekly.md),
 > DRAFT до запуску цієї частини. Це перший конкретний шматок [0021](0021-shared-insights-layer.md):
 > рахунок живе у спільному шарі `src/insights/`, а не в розділі звіту.
+
+> **VERIFIED 2026-11-28** (spec-verifier) on telegram-echo-bot-test, live revision 26969ee. Deploy
+> proven live by polling `gd:raw` from U1 (900000001): "I do not recognise that button." until 13:14:30
+> UTC, then "Даних Garmin немає." at 13:14:40 UTC (push 13:12:20). unit-green: build clean, npm test
+> 477/477, test/insights/ covers every detector, rank, no-repeat, readiness, phrasing fallback, section
+> and gd:raw. raw-no-garmin (U2 900000002): 200 `["Даних Garmin немає."]`. raw-denied (900000007): 200
+> `["Sorry, you are not allowed to use this bot."]`. unknown-button-unchanged (U3 900000003, `xx:1`): 200
+> `["I do not recognise that button."]`. digest-no-garmin (U4 900000004, `/digest on`, X-Test-Now
+> 2027-03-15T07:00+02:00): 200 `sent: true`, one reply (greeting + 0024 empty-day line), no '⌚', no
+> 'Garmin'; supplementary U5 900000005 with a reminder: `sent: true`, "Нагадування / • buy bread - о
+> 12:00", no '⌚'/'Garmin'. Security ATTENTION (G only: `classifier.service.ts` exports its two
+> default constants and `telegram.module.ts` imports `GarminModule`, both outside the named Scope list
+> but non-behavioral wiring); A-F PASS.
 
 ## Context
 
